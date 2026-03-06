@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Checklist arborescente locale</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css"
+      rel="stylesheet"
+      type="text/css"
+    />
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+
+      body {
+        background: linear-gradient(180deg, #fafafa 0%, #f4f6f8 100%);
+        font-size: 14px;
+      }
+
+      .tree-line {
+        position: relative;
+      }
+
+      .tree-line::before {
+        content: "";
+        position: absolute;
+        left: 0.7rem;
+        top: -0.75rem;
+        bottom: -0.75rem;
+        width: 1px;
+        background: rgba(148, 163, 184, 0.25);
+      }
+
+      .tree-line.root::before {
+        display: none;
+      }
+
+      textarea.code-json {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      .compact-card {
+        border-radius: 0.9rem;
+      }
+
+      .compact-node .input,
+      .compact-node .btn,
+      .compact-node .badge,
+      .compact-node .checkbox {
+        min-height: 0;
+      }
+
+      .compact-node .input {
+        height: 2rem;
+      }
+
+      .compact-node .btn.btn-xs {
+        height: 1.5rem;
+        min-height: 1.5rem;
+        padding-left: 0.45rem;
+        padding-right: 0.45rem;
+        font-size: 0.7rem;
+      }
+
+      .compact-node .badge {
+        height: 1.1rem;
+        min-height: 1.1rem;
+        font-size: 0.65rem;
+        padding-left: 0.35rem;
+        padding-right: 0.35rem;
+      }
+
+      .compact-node .checkbox {
+        width: 1rem;
+        height: 1rem;
+      }
+
+      .compact-stack {
+        gap: 0.35rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+
+      const STORAGE_KEY = "xavier-test-tree-v1";
+
+      function uid() {
+        return Math.random().toString(36).slice(2, 10);
+      }
+
+      function createNode(label = "Nouvel item") {
+        return {
+          id: uid(),
+          label,
+          checked: false,
+          expanded: true,
+          children: [],
+        };
+      }
+
+      const DEFAULT_DATA = [
+        {
+          id: uid(),
+          label: "Connecteur fonctionnel",
+          checked: false,
+          expanded: true,
+          children: [
+            createNode("Injection snippet"),
+            createNode("Réécriture d'article"),
+            createNode("Création d'un nouvel article"),
+          ],
+        },
+        {
+          id: uid(),
+          label: "Connecteur défectueux",
+          checked: false,
+          expanded: true,
+          children: [
+            createNode("Fallback manuel"),
+            createNode("Marquer comme implémenté après échec auto"),
+          ],
+        },
+        {
+          id: uid(),
+          label: "Sans connecteur",
+          checked: false,
+          expanded: true,
+          children: [
+            createNode("Mode manuel pur"),
+            createNode("Validation URL vide"),
+            createNode("Versioning manuel"),
+          ],
+        },
+      ];
+
+      function normalizeNode(node) {
+        return {
+          id: node?.id || uid(),
+          label: typeof node?.label === "string" ? node.label : "",
+          checked: Boolean(node?.checked),
+          expanded: node?.expanded !== false,
+          children: Array.isArray(node?.children)
+            ? node.children.map(normalizeNode)
+            : [],
+        };
+      }
+
+      function loadTree() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (!raw) return DEFAULT_DATA;
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return DEFAULT_DATA;
+          return parsed.map(normalizeNode);
+        } catch (err) {
+          console.error("Erreur de lecture localStorage:", err);
+          return DEFAULT_DATA;
+        }
+      }
+
+      function saveTree(tree) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tree, null, 2));
+      }
+
+      function updateNodeById(nodes, nodeId, updater) {
+        return nodes.map((node) => {
+          if (node.id === nodeId) {
+            return updater(node);
+          }
+          if (node.children.length === 0) return node;
+          return {
+            ...node,
+            children: updateNodeById(node.children, nodeId, updater),
+          };
+        });
+      }
+
+      function insertSiblingById(nodes, nodeId, newNode) {
+        const result = [];
+        for (const node of nodes) {
+          if (node.id === nodeId) {
+            result.push(node, newNode);
+          } else {
+            result.push({
+              ...node,
+              children: insertSiblingById(node.children, nodeId, newNode),
+            });
+          }
+        }
+        return result;
+      }
+
+      function addChildById(nodes, nodeId, newNode) {
+        return nodes.map((node) => {
+          if (node.id === nodeId) {
+            return {
+              ...node,
+              expanded: true,
+              children: [...node.children, newNode],
+            };
+          }
+          return {
+            ...node,
+            children: addChildById(node.children, nodeId, newNode),
+          };
+        });
+      }
+
+      function removeNodeById(nodes, nodeId) {
+        const filtered = nodes
+          .filter((node) => node.id !== nodeId)
+          .map((node) => ({
+            ...node,
+            children: removeNodeById(node.children, nodeId),
+          }));
+        return filtered;
+      }
+
+      function setCheckedDeep(node, checked) {
+        return {
+          ...node,
+          checked,
+          children: node.children.map((child) => setCheckedDeep(child, checked)),
+        };
+      }
+
+      function toggleCheckedById(nodes, nodeId, checked) {
+        return nodes.map((node) => {
+          if (node.id === nodeId) {
+            return setCheckedDeep(node, checked);
+          }
+          return {
+            ...node,
+            children: toggleCheckedById(node.children, nodeId, checked),
+          };
+        });
+      }
+
+      function countStats(nodes) {
+        let total = 0;
+        let done = 0;
+        function walk(list) {
+          for (const node of list) {
+            total += 1;
+            if (node.checked) done += 1;
+            walk(node.children);
+          }
+        }
+        walk(nodes);
+        return { total, done, percent: total ? Math.round((done / total) * 100) : 0 };
+      }
+
+      function exportJson(tree) {
+        return JSON.stringify(tree, null, 2);
+      }
+
+      function App() {
+        const [tree, setTree] = useState(loadTree);
+        const [mode, setMode] = useState("view");
+        const [filter, setFilter] = useState("");
+        const [jsonDraft, setJsonDraft] = useState("");
+        const stats = useMemo(() => countStats(tree), [tree]);
+
+        useEffect(() => {
+          saveTree(tree);
+          setJsonDraft(exportJson(tree));
+        }, [tree]);
+
+        useEffect(() => {
+          setJsonDraft(exportJson(tree));
+        }, []);
+
+        const filteredTree = useMemo(() => {
+          const term = filter.trim().toLowerCase();
+          if (!term) return tree;
+
+          function filterNodes(nodes) {
+            const result = [];
+            for (const node of nodes) {
+              const childMatches = filterNodes(node.children);
+              const selfMatches = node.label.toLowerCase().includes(term);
+              if (selfMatches || childMatches.length > 0) {
+                result.push({
+                  ...node,
+                  expanded: true,
+                  children: childMatches,
+                });
+              }
+            }
+            return result;
+          }
+
+          return filterNodes(tree);
+        }, [tree, filter]);
+
+        function addRoot() {
+          setTree((prev) => [...prev, createNode("Nouvelle section")]);
+        }
+
+        function resetAll() {
+          if (!window.confirm("Réinitialiser toutes les données locales ?")) return;
+          setTree(DEFAULT_DATA);
+        }
+
+        function importJson() {
+          try {
+            const parsed = JSON.parse(jsonDraft);
+            if (!Array.isArray(parsed)) {
+              alert("Le JSON doit être un tableau racine.");
+              return;
+            }
+            setTree(parsed.map(normalizeNode));
+          } catch (err) {
+            alert("JSON invalide.");
+          }
+        }
+
+        function downloadJson() {
+          const blob = new Blob([exportJson(tree)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "checklist-tree.json";
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+
+        return (
+          <div className="min-h-full p-4 md:p-8">
+            <div className="mx-auto max-w-7xl space-y-6">
+              <div className="compact-card rounded-3xl bg-base-100 shadow-xl border border-base-200">
+                <div className="p-5 md:p-8">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h1 className="text-3xl font-bold tracking-tight">Checklist arborescente locale</h1>
+                      <p className="mt-2 text-base-content/70">
+                        Vue édition pour structurer, vue affichage pour exécuter. Les données vivent en localStorage.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="join">
+                        <button
+                          className={`join-item btn ${mode === "view" ? "btn-primary" : "btn-ghost"}`}
+                          onClick={() => setMode("view")}
+                        >
+                          Affichage
+                        </button>
+                        <button
+                          className={`join-item btn ${mode === "edit" ? "btn-primary" : "btn-ghost"}`}
+                          onClick={() => setMode("edit")}
+                        >
+                          Édition
+                        </button>
+                      </div>
+                      <button className="btn btn-outline" onClick={downloadJson}>Exporter JSON</button>
+                      <button className="btn btn-outline btn-warning" onClick={resetAll}>Reset</button>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 grid gap-4 lg:grid-cols-4">
+                    <div className="stats bg-base-200 shadow lg:col-span-3">
+                      <div className="stat">
+                        <div className="stat-title">Éléments</div>
+                        <div className="stat-value text-3xl">{stats.total}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="stat-title">Cochés</div>
+                        <div className="stat-value text-3xl">{stats.done}</div>
+                      </div>
+                      <div className="stat">
+                        <div className="stat-title">Progression</div>
+                        <div className="stat-value text-3xl">{stats.percent}%</div>
+                      </div>
+                    </div>
+
+                    <label className="form-control">
+                      <div className="label">
+                        <span className="label-text font-medium">Filtrer</span>
+                      </div>
+                      <input
+                        type="text"
+                        className="input input-bordered"
+                        placeholder="Recherche..."
+                        value={filter}
+                        onChange={(e) => setFilter(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+                <div className="compact-card rounded-3xl bg-base-100 p-3 md:p-4 shadow-xl border border-base-200">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-xl font-semibold">
+                        {mode === "edit" ? "Arborescence en édition" : "Arborescence d'exécution"}
+                      </h2>
+                      <p className="text-sm text-base-content/70 mt-1">
+                        {mode === "edit"
+                          ? "Ajoute des siblings, des children, renomme, supprime et réorganise la structure à la main."
+                          : "Coche les cases pendant tes tests. Cocher un parent propage la valeur à tous ses enfants."}
+                      </p>
+                    </div>
+                    {mode === "edit" && (
+                      <button className="btn btn-primary" onClick={addRoot}>
+                        + Racine
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="compact-stack space-y-2">
+                    {filteredTree.length === 0 ? (
+                      <div className="alert">
+                        <span>Aucun élément à afficher.</span>
+                      </div>
+                    ) : (
+                      filteredTree.map((node) => (
+                        <TreeNode
+                          key={node.id}
+                          node={node}
+                          rootNodes={tree}
+                          mode={mode}
+                          depth={0}
+                          onUpdateTree={setTree}
+                        />
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="compact-card rounded-3xl bg-base-100 p-3 md:p-4 shadow-xl border border-base-200 space-y-3">
+                  <div>
+                    <h2 className="text-xl font-semibold">JSON local</h2>
+                    <p className="text-sm text-base-content/70 mt-1">
+                      Tu peux inspecter, sauvegarder ou réimporter la structure complète.
+                    </p>
+                  </div>
+
+                  <textarea
+                    className="textarea textarea-bordered w-full h-[360px] code-json text-xs leading-5"
+                    value={jsonDraft}
+                    onChange={(e) => setJsonDraft(e.target.value)}
+                    spellCheck={false}
+                  />
+
+                  <div className="flex flex-wrap gap-3">
+                    <button className="btn btn-primary" onClick={importJson}>
+                      Importer ce JSON
+                    </button>
+                    <button className="btn btn-outline" onClick={() => setJsonDraft(exportJson(tree))}>
+                      Recharger depuis l'état actuel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      function TreeNode({ node, rootNodes, mode, depth, onUpdateTree }) {
+        const hasChildren = node.children.length > 0;
+
+        function updateCurrent(updater) {
+          onUpdateTree((prev) => updateNodeById(prev, node.id, updater));
+        }
+
+        function handleRename(label) {
+          updateCurrent((current) => ({ ...current, label }));
+        }
+
+        function handleToggleExpand() {
+          updateCurrent((current) => ({ ...current, expanded: !current.expanded }));
+        }
+
+        function handleAddChild() {
+          onUpdateTree((prev) => addChildById(prev, node.id, createNode("Nouvel enfant")));
+        }
+
+        function handleAddSibling() {
+          onUpdateTree((prev) => insertSiblingById(prev, node.id, createNode("Nouveau sibling")));
+        }
+
+        function handleDelete() {
+          if (!window.confirm(`Supprimer \"${node.label || 'cet item'}\" et ses enfants ?`)) return;
+          onUpdateTree((prev) => removeNodeById(prev, node.id));
+        }
+
+        function handleCheck(checked) {
+          onUpdateTree((prev) => toggleCheckedById(prev, node.id, checked));
+        }
+
+        return (
+          <div className={`tree-line ${depth === 0 ? "root" : ""}`} style={{ paddingLeft: depth === 0 ? 0 : 14 }}>
+            <div className="compact-node rounded-xl border border-base-200 bg-base-100 hover:border-base-300 transition-colors">
+              <div className="flex items-start gap-1.5 p-2">
+                <button
+                  className={`btn btn-xs btn-ghost mt-0.5 ${hasChildren ? "visible" : "invisible"}`}
+                  onClick={handleToggleExpand}
+                  title={node.expanded ? "Replier" : "Déplier"}
+                >
+                  {node.expanded ? "−" : "+"}
+                </button>
+
+                {mode === "view" ? (
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-primary mt-0.5"
+                    checked={node.checked}
+                    onChange={(e) => handleCheck(e.target.checked)}
+                  />
+                ) : (
+                  <div className="badge badge-outline mt-0.5">{depth}</div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  {mode === "edit" ? (
+                    <input
+                      type="text"
+                      className="input input-bordered input-sm w-full text-sm"
+                      value={node.label}
+                      onChange={(e) => handleRename(e.target.value)}
+                      placeholder="Libellé"
+                    />
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <span className={`font-medium text-sm leading-5 ${node.checked ? "line-through text-base-content/50" : ""}`}>
+                        {node.label || <span className="italic text-base-content/40">Sans titre</span>}
+                      </span>
+                      {hasChildren && (
+                        <span className="badge badge-neutral badge-sm">{node.children.length}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {mode === "edit" && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <button className="btn btn-xs btn-outline btn-primary" onClick={handleAddChild}>
+                        + Child
+                      </button>
+                      <button className="btn btn-xs btn-outline" onClick={handleAddSibling}>
+                        + Sibling
+                      </button>
+                      <button className="btn btn-xs btn-outline btn-error" onClick={handleDelete}>
+                        Supprimer
+                      </button>
+                      <button className="btn btn-xs btn-ghost" onClick={handleToggleExpand}>
+                        {node.expanded ? "Replier" : "Déplier"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {node.expanded && hasChildren && (
+              <div className="mt-1.5 compact-stack space-y-2">
+                {node.children.map((child) => (
+                  <TreeNode
+                    key={child.id}
+                    node={child}
+                    rootNodes={rootNodes}
+                    mode={mode}
+                    depth={depth + 1}
+                    onUpdateTree={onUpdateTree}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>
