@@ -12,8 +12,14 @@
       type="text/css"
     />
 
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
@@ -28,26 +34,9 @@
         font-size: 14px;
       }
 
-      .tree-line {
-        position: relative;
-      }
-
-      .tree-line::before {
-        content: "";
-        position: absolute;
-        left: 0.7rem;
-        top: -0.75rem;
-        bottom: -0.75rem;
-        width: 1px;
-        background: rgba(148, 163, 184, 0.25);
-      }
-
-      .tree-line.root::before {
-        display: none;
-      }
-
       textarea.code-json {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       }
 
       .compact-card {
@@ -87,7 +76,59 @@
       }
 
       .compact-stack {
-        gap: 0.35rem;
+        gap: 0.4rem;
+      }
+
+      .tree-node-wrap {
+        position: relative;
+      }
+
+      .tree-children {
+        position: relative;
+        margin-top: 0.45rem;
+        padding-left: 2.1rem;
+      }
+
+      .tree-children::before {
+        content: "";
+        position: absolute;
+        left: 0.72rem;
+        top: 0;
+        bottom: 0.35rem;
+        width: 2px;
+        background: linear-gradient(
+          180deg,
+          rgba(148, 163, 184, 0.45) 0%,
+          rgba(148, 163, 184, 0.18) 100%
+        );
+        border-radius: 999px;
+      }
+
+      .tree-child-row {
+        position: relative;
+      }
+
+      .tree-child-row::before {
+        content: "";
+        position: absolute;
+        left: -1.35rem;
+        top: 1rem;
+        width: 0.95rem;
+        height: 2px;
+        background: rgba(148, 163, 184, 0.35);
+        border-radius: 999px;
+      }
+
+      .node-depth-shadow-0 {
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+
+      .node-depth-shadow-1,
+      .node-depth-shadow-2,
+      .node-depth-shadow-3,
+      .node-depth-shadow-4,
+      .node-depth-shadow-5 {
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
       }
     </style>
   </head>
@@ -97,7 +138,9 @@
     <script type="text/babel">
       const { useEffect, useMemo, useState } = React;
 
-      const STORAGE_KEY = "xavier-test-tree-v1";
+      const STORAGE_PREFIX = "xavier-test-tree-v2_";
+      const PROJECTS_STORAGE_KEY = "xavier-test-tree-v2_projects";
+      const ACTIVE_PROJECT_STORAGE_KEY = "xavier-test-tree-v2_active_project";
 
       function uid() {
         return Math.random().toString(36).slice(2, 10);
@@ -148,6 +191,10 @@
         },
       ];
 
+      function cloneDefaultData() {
+        return DEFAULT_DATA.map(normalizeNode);
+      }
+
       function normalizeNode(node) {
         return {
           id: node?.id || uid(),
@@ -160,21 +207,161 @@
         };
       }
 
-      function loadTree() {
+      function normalizeProjectName(name) {
+        return String(name || "")
+          .trim()
+          .replace(/\s+/g, " ");
+      }
+
+      function projectNameToCode(name) {
+        return normalizeProjectName(name)
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "");
+      }
+
+      function isValidProjectName(name) {
+        return /[a-z0-9]/i.test(name || "");
+      }
+
+      function makeProjectStorageKey(code) {
+        return `${STORAGE_PREFIX}${code}`;
+      }
+
+      function getDefaultProject() {
+        return {
+          name: "Default",
+          code: "default",
+        };
+      }
+
+      function normalizeProject(project) {
+        const name = normalizeProjectName(project?.name || "");
+        const code = projectNameToCode(project?.code || name);
+        if (!name || !code) return null;
+        return { name, code };
+      }
+
+      function saveProjects(projects) {
+        localStorage.setItem(
+          PROJECTS_STORAGE_KEY,
+          JSON.stringify(projects, null, 2),
+        );
+      }
+
+      function loadProjects() {
         try {
-          const raw = localStorage.getItem(STORAGE_KEY);
-          if (!raw) return DEFAULT_DATA;
+          const raw = localStorage.getItem(PROJECTS_STORAGE_KEY);
+          if (!raw) {
+            const fallback = [getDefaultProject()];
+            saveProjects(fallback);
+            return fallback;
+          }
+
           const parsed = JSON.parse(raw);
-          if (!Array.isArray(parsed)) return DEFAULT_DATA;
-          return parsed.map(normalizeNode);
+          if (!Array.isArray(parsed)) {
+            const fallback = [getDefaultProject()];
+            saveProjects(fallback);
+            return fallback;
+          }
+
+          const normalized = parsed
+            .map(normalizeProject)
+            .filter(Boolean)
+            .filter(
+              (project, index, arr) =>
+                arr.findIndex((p) => p.code === project.code) === index,
+            );
+
+          if (normalized.length === 0) {
+            const fallback = [getDefaultProject()];
+            saveProjects(fallback);
+            return fallback;
+          }
+
+          return normalized;
         } catch (err) {
-          console.error("Erreur de lecture localStorage:", err);
-          return DEFAULT_DATA;
+          console.error("Erreur de lecture des projets:", err);
+          const fallback = [getDefaultProject()];
+          saveProjects(fallback);
+          return fallback;
         }
       }
 
-      function saveTree(tree) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(tree, null, 2));
+      function loadActiveProjectCode(projects) {
+        const stored = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+        if (stored && projects.some((project) => project.code === stored)) {
+          return stored;
+        }
+        const firstCode = projects[0]?.code || getDefaultProject().code;
+        localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, firstCode);
+        return firstCode;
+      }
+
+      function saveActiveProjectCode(code) {
+        localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, code);
+      }
+
+      function loadTree(projectCode) {
+        try {
+          const raw = localStorage.getItem(makeProjectStorageKey(projectCode));
+          if (!raw) return cloneDefaultData();
+          const parsed = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return cloneDefaultData();
+          return parsed.map(normalizeNode);
+        } catch (err) {
+          console.error("Erreur de lecture localStorage:", err);
+          return cloneDefaultData();
+        }
+      }
+
+      function saveTree(projectCode, tree) {
+        localStorage.setItem(
+          makeProjectStorageKey(projectCode),
+          JSON.stringify(tree, null, 2),
+        );
+      }
+
+      function exportJson(tree) {
+        return JSON.stringify(tree, null, 2);
+      }
+
+      function exportAllProjects(projects) {
+        const payload = {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          projects: projects.map((project) => ({
+            name: project.name,
+            code: project.code,
+            tree: loadTree(project.code),
+          })),
+        };
+        return JSON.stringify(payload, null, 2);
+      }
+
+      function parseAllProjectsJson(raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          !parsed ||
+          typeof parsed !== "object" ||
+          !Array.isArray(parsed.projects)
+        ) {
+          throw new Error("Format global invalide");
+        }
+
+        return parsed.projects
+          .map((item) => {
+            const name = normalizeProjectName(item?.name || "");
+            const code = projectNameToCode(item?.code || name);
+            if (!name || !code) return null;
+            return {
+              name,
+              code,
+              tree: Array.isArray(item?.tree)
+                ? item.tree.map(normalizeNode)
+                : cloneDefaultData(),
+            };
+          })
+          .filter(Boolean);
       }
 
       function updateNodeById(nodes, nodeId, updater) {
@@ -222,20 +409,21 @@
       }
 
       function removeNodeById(nodes, nodeId) {
-        const filtered = nodes
+        return nodes
           .filter((node) => node.id !== nodeId)
           .map((node) => ({
             ...node,
             children: removeNodeById(node.children, nodeId),
           }));
-        return filtered;
       }
 
       function setCheckedDeep(node, checked) {
         return {
           ...node,
           checked,
-          children: node.children.map((child) => setCheckedDeep(child, checked)),
+          children: node.children.map((child) =>
+            setCheckedDeep(child, checked),
+          ),
         };
       }
 
@@ -251,9 +439,59 @@
         });
       }
 
+      function moveItemInArray(items, fromIndex, toIndex) {
+        if (
+          fromIndex < 0 ||
+          toIndex < 0 ||
+          fromIndex >= items.length ||
+          toIndex >= items.length ||
+          fromIndex === toIndex
+        ) {
+          return items;
+        }
+
+        const next = [...items];
+        const [moved] = next.splice(fromIndex, 1);
+        next.splice(toIndex, 0, moved);
+        return next;
+      }
+
+      function moveNodeById(nodes, nodeId, direction) {
+        const index = nodes.findIndex((node) => node.id === nodeId);
+
+        if (index !== -1) {
+          const targetIndex = direction === "up" ? index - 1 : index + 1;
+          return moveItemInArray(nodes, index, targetIndex);
+        }
+
+        return nodes.map((node) => ({
+          ...node,
+          children: moveNodeById(node.children, nodeId, direction),
+        }));
+      }
+
+      function canMoveNode(nodes, nodeId, direction) {
+        const index = nodes.findIndex((node) => node.id === nodeId);
+
+        if (index !== -1) {
+          if (direction === "up") return index > 0;
+          return index < nodes.length - 1;
+        }
+
+        for (const node of nodes) {
+          if (node.children.length > 0) {
+            const childCanMove = canMoveNode(node.children, nodeId, direction);
+            if (childCanMove !== null) return childCanMove;
+          }
+        }
+
+        return null;
+      }
+
       function countStats(nodes) {
         let total = 0;
         let done = 0;
+
         function walk(list) {
           for (const node of list) {
             total += 1;
@@ -261,29 +499,44 @@
             walk(node.children);
           }
         }
-        walk(nodes);
-        return { total, done, percent: total ? Math.round((done / total) * 100) : 0 };
-      }
 
-      function exportJson(tree) {
-        return JSON.stringify(tree, null, 2);
+        walk(nodes);
+        return {
+          total,
+          done,
+          percent: total ? Math.round((done / total) * 100) : 0,
+        };
       }
 
       function App() {
-        const [tree, setTree] = useState(loadTree);
+        const [projects, setProjects] = useState(() => loadProjects());
+        const [activeProjectCode, setActiveProjectCode] = useState(() => {
+          const initialProjects = loadProjects();
+          return loadActiveProjectCode(initialProjects);
+        });
+        const [tree, setTree] = useState(() => {
+          const initialProjects = loadProjects();
+          const initialCode = loadActiveProjectCode(initialProjects);
+          return loadTree(initialCode);
+        });
         const [mode, setMode] = useState("view");
         const [filter, setFilter] = useState("");
         const [jsonDraft, setJsonDraft] = useState("");
+        const [allProjectsDraft, setAllProjectsDraft] = useState("");
+        const [jsonTab, setJsonTab] = useState("current");
+        const [showJsonModal, setShowJsonModal] = useState(false);
+        const [newProjectName, setNewProjectName] = useState("");
+        const [editingProjectCode, setEditingProjectCode] = useState(null);
+        const [editingProjectName, setEditingProjectName] = useState("");
+
         const stats = useMemo(() => countStats(tree), [tree]);
-
-        useEffect(() => {
-          saveTree(tree);
-          setJsonDraft(exportJson(tree));
-        }, [tree]);
-
-        useEffect(() => {
-          setJsonDraft(exportJson(tree));
-        }, []);
+        const activeProject = useMemo(() => {
+          return (
+            projects.find((project) => project.code === activeProjectCode) ||
+            projects[0] ||
+            getDefaultProject()
+          );
+        }, [projects, activeProjectCode]);
 
         const filteredTree = useMemo(() => {
           const term = filter.trim().toLowerCase();
@@ -308,13 +561,39 @@
           return filterNodes(tree);
         }, [tree, filter]);
 
+        useEffect(() => {
+          saveProjects(projects);
+        }, [projects]);
+
+        useEffect(() => {
+          if (!activeProjectCode) return;
+          saveActiveProjectCode(activeProjectCode);
+          setTree(loadTree(activeProjectCode));
+          setFilter("");
+        }, [activeProjectCode]);
+
+        useEffect(() => {
+          if (!activeProjectCode) return;
+          saveTree(activeProjectCode, tree);
+          setJsonDraft(exportJson(tree));
+        }, [tree, activeProjectCode]);
+
+        useEffect(() => {
+          setAllProjectsDraft(exportAllProjects(projects));
+        }, [projects, tree, activeProjectCode]);
+
         function addRoot() {
           setTree((prev) => [...prev, createNode("Nouvelle section")]);
         }
 
         function resetAll() {
-          if (!window.confirm("Réinitialiser toutes les données locales ?")) return;
-          setTree(DEFAULT_DATA);
+          if (
+            !window.confirm(
+              `Réinitialiser toutes les données du projet \"${activeProject.name}\" ?`,
+            )
+          )
+            return;
+          setTree(cloneDefaultData());
         }
 
         function importJson() {
@@ -325,92 +604,386 @@
               return;
             }
             setTree(parsed.map(normalizeNode));
+            setShowJsonModal(false);
           } catch (err) {
             alert("JSON invalide.");
           }
         }
 
+        function importAllProjects() {
+          try {
+            const importedProjects = parseAllProjectsJson(allProjectsDraft);
+            if (importedProjects.length === 0) {
+              alert("Aucun projet valide trouvé dans le JSON global.");
+              return;
+            }
+
+            const mergedMap = new Map(
+              projects.map((project) => [project.code, project]),
+            );
+
+            for (const imported of importedProjects) {
+              mergedMap.set(imported.code, {
+                name: imported.name,
+                code: imported.code,
+              });
+              saveTree(imported.code, imported.tree);
+            }
+
+            const nextProjects = Array.from(mergedMap.values());
+            setProjects(nextProjects);
+
+            if (
+              !nextProjects.some(
+                (project) => project.code === activeProjectCode,
+              )
+            ) {
+              setActiveProjectCode(importedProjects[0].code);
+            } else if (
+              importedProjects.some(
+                (project) => project.code === activeProjectCode,
+              )
+            ) {
+              setTree(loadTree(activeProjectCode));
+            }
+
+            setShowJsonModal(false);
+          } catch (err) {
+            alert("JSON global invalide.");
+          }
+        }
+
         function downloadJson() {
-          const blob = new Blob([exportJson(tree)], { type: "application/json" });
+          const filenameCode = activeProject?.code || "project";
+          const blob = new Blob([exportJson(tree)], {
+            type: "application/json",
+          });
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = "checklist-tree.json";
+          a.download = `checklist-tree-${filenameCode}.json`;
           a.click();
           URL.revokeObjectURL(url);
         }
 
+        function downloadAllProjectsJson() {
+          const blob = new Blob([exportAllProjects(projects)], {
+            type: "application/json",
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "checklist-tree-all-projects.json";
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+
+        function handleCreateProject() {
+          const normalizedName = normalizeProjectName(newProjectName);
+          const code = projectNameToCode(normalizedName);
+
+          if (!isValidProjectName(normalizedName) || !code) {
+            alert(
+              "Le nom du projet doit contenir au moins un caractère alphanumérique.",
+            );
+            return;
+          }
+
+          if (projects.some((project) => project.code === code)) {
+            alert(`Le projet \"${code}\" existe déjà.`);
+            return;
+          }
+
+          const newProject = { name: normalizedName, code };
+          const newTree = cloneDefaultData();
+
+          setProjects((prev) => [...prev, newProject]);
+          saveTree(code, newTree);
+          setActiveProjectCode(code);
+          setNewProjectName("");
+        }
+
+        function handleStartRenameProject(project) {
+          setEditingProjectCode(project.code);
+          setEditingProjectName(project.name);
+        }
+
+        function handleCancelRenameProject() {
+          setEditingProjectCode(null);
+          setEditingProjectName("");
+        }
+
+        function handleConfirmRenameProject(project) {
+          const normalizedName = normalizeProjectName(editingProjectName);
+          const nextCode = projectNameToCode(normalizedName);
+
+          if (!isValidProjectName(normalizedName) || !nextCode) {
+            alert(
+              "Le nom du projet doit contenir au moins un caractère alphanumérique.",
+            );
+            return;
+          }
+
+          const duplicate = projects.find(
+            (item) => item.code === nextCode && item.code !== project.code,
+          );
+          if (duplicate) {
+            alert(`Le projet \"${nextCode}\" existe déjà.`);
+            return;
+          }
+
+          const renamedProject = { name: normalizedName, code: nextCode };
+          const oldStorageKey = makeProjectStorageKey(project.code);
+          const newStorageKey = makeProjectStorageKey(nextCode);
+          const raw = localStorage.getItem(oldStorageKey);
+
+          setProjects((prev) =>
+            prev.map((item) =>
+              item.code === project.code ? renamedProject : item,
+            ),
+          );
+
+          if (raw !== null) {
+            localStorage.setItem(newStorageKey, raw);
+            if (newStorageKey !== oldStorageKey) {
+              localStorage.removeItem(oldStorageKey);
+            }
+          }
+
+          if (activeProjectCode === project.code) {
+            setActiveProjectCode(nextCode);
+          }
+
+          handleCancelRenameProject();
+        }
+
+        function handleDeleteProject(project) {
+          if (
+            !window.confirm(
+              `Supprimer le projet \"${project.name}\" et ses données locales ?`,
+            )
+          )
+            return;
+
+          const nextProjects = projects.filter(
+            (item) => item.code !== project.code,
+          );
+          localStorage.removeItem(makeProjectStorageKey(project.code));
+
+          if (nextProjects.length === 0) {
+            const fallback = [getDefaultProject()];
+            const fallbackTree = cloneDefaultData();
+            setProjects(fallback);
+            saveTree(fallback[0].code, fallbackTree);
+            setActiveProjectCode(fallback[0].code);
+            setTree(fallbackTree);
+            return;
+          }
+
+          setProjects(nextProjects);
+          if (activeProjectCode === project.code) {
+            setActiveProjectCode(nextProjects[0].code);
+          }
+        }
+
         return (
-          <div className="min-h-full p-4 md:p-8">
-            <div className="mx-auto max-w-7xl space-y-6">
-              <div className="compact-card rounded-3xl bg-base-100 shadow-xl border border-base-200">
-                <div className="p-5 md:p-8">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h1 className="text-3xl font-bold tracking-tight">Checklist arborescente locale</h1>
-                      <p className="mt-2 text-base-content/70">
-                        Vue édition pour structurer, vue affichage pour exécuter. Les données vivent en localStorage.
-                      </p>
-                    </div>
+          <>
+            <div className="min-h-full p-4 md:p-8">
+              <div className="mx-auto max-w-7xl space-y-4">
+                <div className="compact-card rounded-3xl bg-base-100 shadow-xl border border-base-200">
+                  <div className="p-4 md:p-5 space-y-3">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
+                        <h1 className="text-lg md:text-xl font-bold tracking-tight">
+                          Checklist arborescente locale
+                        </h1>
+                        <span className="badge badge-outline badge-sm">
+                          {activeProject.name}
+                        </span>
+                        <code className="rounded bg-base-200 px-2 py-1 text-[11px]">
+                          {makeProjectStorageKey(activeProject.code)}
+                        </code>
+                        <div className="rounded-2xl border border-base-200 bg-base-50 px-3 py-1.5 text-sm flex flex-wrap items-center gap-3">
+                          <span>
+                            <span className="font-semibold">Éléments</span>{" "}
+                            {stats.total}
+                          </span>
+                          <span>
+                            <span className="font-semibold">Cochés</span>{" "}
+                            {stats.done}
+                          </span>
+                          <span>
+                            <span className="font-semibold">Progression</span>{" "}
+                            {stats.percent}%
+                          </span>
+                        </div>
+                      </div>
 
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="join">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {mode === "edit" && editingProjectCode === null && (
+                          <>
+                            <input
+                              type="text"
+                              className="input input-bordered input-sm w-44"
+                              placeholder="Nouveau projet"
+                              value={newProjectName}
+                              onChange={(e) =>
+                                setNewProjectName(e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleCreateProject();
+                              }}
+                            />
+                            <button
+                              className="btn btn-sm btn-primary"
+                              onClick={handleCreateProject}
+                            >
+                              + Projet
+                            </button>
+                          </>
+                        )}
+
+                        <label className="input input-bordered input-sm flex items-center gap-2 w-52">
+                          <span className="text-xs opacity-70">🔎</span>
+                          <input
+                            type="text"
+                            className="grow"
+                            placeholder="Recherche..."
+                            value={filter}
+                            onChange={(e) => setFilter(e.target.value)}
+                          />
+                        </label>
+
+                        <div className="join">
+                          <button
+                            className={`join-item btn btn-sm ${mode === "view" ? "btn-primary" : "btn-ghost"}`}
+                            onClick={() => setMode("view")}
+                          >
+                            Affichage
+                          </button>
+                          <button
+                            className={`join-item btn btn-sm ${mode === "edit" ? "btn-primary" : "btn-ghost"}`}
+                            onClick={() => setMode("edit")}
+                          >
+                            Édition
+                          </button>
+                        </div>
+
                         <button
-                          className={`join-item btn ${mode === "view" ? "btn-primary" : "btn-ghost"}`}
-                          onClick={() => setMode("view")}
+                          className="btn btn-ghost btn-sm gap-2"
+                          onClick={() => setShowJsonModal(true)}
+                          title="Ouvrir les outils JSON"
                         >
-                          Affichage
+                          <span aria-hidden="true">⚙️</span>
+                          JSON
+                        </button>
+
+                        <button
+                          className="btn btn-outline btn-sm"
+                          onClick={downloadJson}
+                        >
+                          Exporter
                         </button>
                         <button
-                          className={`join-item btn ${mode === "edit" ? "btn-primary" : "btn-ghost"}`}
-                          onClick={() => setMode("edit")}
+                          className="btn btn-outline btn-warning btn-sm"
+                          onClick={resetAll}
                         >
-                          Édition
+                          Reset
                         </button>
                       </div>
-                      <button className="btn btn-outline" onClick={downloadJson}>Exporter JSON</button>
-                      <button className="btn btn-outline btn-warning" onClick={resetAll}>Reset</button>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid gap-4 lg:grid-cols-4">
-                    <div className="stats bg-base-200 shadow lg:col-span-3">
-                      <div className="stat">
-                        <div className="stat-title">Éléments</div>
-                        <div className="stat-value text-3xl">{stats.total}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="stat-title">Cochés</div>
-                        <div className="stat-value text-3xl">{stats.done}</div>
-                      </div>
-                      <div className="stat">
-                        <div className="stat-title">Progression</div>
-                        <div className="stat-value text-3xl">{stats.percent}%</div>
-                      </div>
                     </div>
 
-                    <label className="form-control">
-                      <div className="label">
-                        <span className="label-text font-medium">Filtrer</span>
-                      </div>
-                      <input
-                        type="text"
-                        className="input input-bordered"
-                        placeholder="Recherche..."
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                      />
-                    </label>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {projects.map((project) => {
+                        const isActive = project.code === activeProjectCode;
+                        const isEditing = editingProjectCode === project.code;
+
+                        return (
+                          <div key={project.code} className="join max-w-full">
+                            {isEditing ? (
+                              <>
+                                <input
+                                  type="text"
+                                  className="join-item input input-bordered input-sm w-40"
+                                  value={editingProjectName}
+                                  onChange={(e) =>
+                                    setEditingProjectName(e.target.value)
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter")
+                                      handleConfirmRenameProject(project);
+                                    if (e.key === "Escape")
+                                      handleCancelRenameProject();
+                                  }}
+                                  autoFocus
+                                />
+                                <button
+                                  className="join-item btn btn-sm btn-primary"
+                                  onClick={() =>
+                                    handleConfirmRenameProject(project)
+                                  }
+                                  title="Valider le renommage"
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  className="join-item btn btn-sm btn-ghost"
+                                  onClick={handleCancelRenameProject}
+                                  title="Annuler le renommage"
+                                >
+                                  ✕
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className={`join-item btn btn-sm ${isActive ? "btn-primary" : "btn-outline"}`}
+                                  onClick={() =>
+                                    setActiveProjectCode(project.code)
+                                  }
+                                  title={`${project.name} (${project.code})`}
+                                >
+                                  <span>{project.name}</span>
+                                  <span className="opacity-70 text-xs">
+                                    {project.code}
+                                  </span>
+                                </button>
+                                {mode === "edit" && (
+                                  <button
+                                    className="join-item btn btn-sm btn-outline"
+                                    onClick={() =>
+                                      handleStartRenameProject(project)
+                                    }
+                                    title={`Renommer ${project.name}`}
+                                  >
+                                    ✏️
+                                  </button>
+                                )}
+                                {mode === "edit" && (
+                                  <button
+                                    className="join-item btn btn-sm btn-outline btn-error"
+                                    onClick={() => handleDeleteProject(project)}
+                                    title={`Supprimer ${project.name}`}
+                                  >
+                                    🗑
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
                 <div className="compact-card rounded-3xl bg-base-100 p-3 md:p-4 shadow-xl border border-base-200">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h2 className="text-xl font-semibold">
-                        {mode === "edit" ? "Arborescence en édition" : "Arborescence d'exécution"}
+                        {mode === "edit"
+                          ? "Arborescence en édition"
+                          : "Arborescence d'exécution"}
                       </h2>
                       <p className="text-sm text-base-content/70 mt-1">
                         {mode === "edit"
@@ -435,7 +1008,7 @@
                         <TreeNode
                           key={node.id}
                           node={node}
-                          rootNodes={tree}
+                          allNodes={tree}
                           mode={mode}
                           depth={0}
                           onUpdateTree={setTree}
@@ -444,39 +1017,127 @@
                     )}
                   </div>
                 </div>
-
-                <div className="compact-card rounded-3xl bg-base-100 p-3 md:p-4 shadow-xl border border-base-200 space-y-3">
-                  <div>
-                    <h2 className="text-xl font-semibold">JSON local</h2>
-                    <p className="text-sm text-base-content/70 mt-1">
-                      Tu peux inspecter, sauvegarder ou réimporter la structure complète.
-                    </p>
-                  </div>
-
-                  <textarea
-                    className="textarea textarea-bordered w-full h-[360px] code-json text-xs leading-5"
-                    value={jsonDraft}
-                    onChange={(e) => setJsonDraft(e.target.value)}
-                    spellCheck={false}
-                  />
-
-                  <div className="flex flex-wrap gap-3">
-                    <button className="btn btn-primary" onClick={importJson}>
-                      Importer ce JSON
-                    </button>
-                    <button className="btn btn-outline" onClick={() => setJsonDraft(exportJson(tree))}>
-                      Recharger depuis l'état actuel
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
-          </div>
+
+            {showJsonModal && (
+              <div className="modal modal-open">
+                <div className="modal-box max-w-4xl p-0 overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-base-200 px-5 py-4">
+                    <div>
+                      <h3 className="text-lg font-semibold">JSON local</h3>
+                      <p className="text-sm text-base-content/70 mt-1">
+                        Tu peux gérer le projet actif ou faire un import/export
+                        global de tous les projets.
+                      </p>
+                    </div>
+                    <button
+                      className="btn btn-sm btn-circle btn-ghost"
+                      onClick={() => setShowJsonModal(false)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="p-5 space-y-4">
+                    <div className="join">
+                      <button
+                        className={`join-item btn btn-sm ${jsonTab === "current" ? "btn-primary" : "btn-ghost"}`}
+                        onClick={() => setJsonTab("current")}
+                      >
+                        Projet actif
+                      </button>
+                      <button
+                        className={`join-item btn btn-sm ${jsonTab === "all" ? "btn-primary" : "btn-ghost"}`}
+                        onClick={() => setJsonTab("all")}
+                      >
+                        Tous les projets
+                      </button>
+                    </div>
+
+                    {jsonTab === "current" ? (
+                      <>
+                        <textarea
+                          className="textarea textarea-bordered w-full h-[420px] code-json text-xs leading-5"
+                          value={jsonDraft}
+                          onChange={(e) => setJsonDraft(e.target.value)}
+                          spellCheck={false}
+                        />
+
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            className="btn btn-primary"
+                            onClick={importJson}
+                          >
+                            Importer ce JSON
+                          </button>
+                          <button
+                            className="btn btn-outline"
+                            onClick={() => setJsonDraft(exportJson(tree))}
+                          >
+                            Recharger depuis l'état actuel
+                          </button>
+                          <button
+                            className="btn btn-outline"
+                            onClick={downloadJson}
+                          >
+                            Télécharger le JSON
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-sm text-base-content/70">
+                          Import global : les projets du même code sont écrasés,
+                          les autres sont ajoutés.
+                        </div>
+                        <textarea
+                          className="textarea textarea-bordered w-full h-[420px] code-json text-xs leading-5"
+                          value={allProjectsDraft}
+                          onChange={(e) => setAllProjectsDraft(e.target.value)}
+                          spellCheck={false}
+                        />
+
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            className="btn btn-primary"
+                            onClick={importAllProjects}
+                          >
+                            Importer tous les projets
+                          </button>
+                          <button
+                            className="btn btn-outline"
+                            onClick={() =>
+                              setAllProjectsDraft(exportAllProjects(projects))
+                            }
+                          >
+                            Recharger l'export global
+                          </button>
+                          <button
+                            className="btn btn-outline"
+                            onClick={downloadAllProjectsJson}
+                          >
+                            Télécharger tout
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div
+                  className="modal-backdrop"
+                  onClick={() => setShowJsonModal(false)}
+                ></div>
+              </div>
+            )}
+          </>
         );
       }
 
-      function TreeNode({ node, rootNodes, mode, depth, onUpdateTree }) {
+      function TreeNode({ node, allNodes, mode, depth, onUpdateTree }) {
         const hasChildren = node.children.length > 0;
+        const canMoveUp = canMoveNode(allNodes, node.id, "up") === true;
+        const canMoveDown = canMoveNode(allNodes, node.id, "down") === true;
 
         function updateCurrent(updater) {
           onUpdateTree((prev) => updateNodeById(prev, node.id, updater));
@@ -487,19 +1148,31 @@
         }
 
         function handleToggleExpand() {
-          updateCurrent((current) => ({ ...current, expanded: !current.expanded }));
+          updateCurrent((current) => ({
+            ...current,
+            expanded: !current.expanded,
+          }));
         }
 
         function handleAddChild() {
-          onUpdateTree((prev) => addChildById(prev, node.id, createNode("Nouvel enfant")));
+          onUpdateTree((prev) =>
+            addChildById(prev, node.id, createNode("Nouvel enfant")),
+          );
         }
 
         function handleAddSibling() {
-          onUpdateTree((prev) => insertSiblingById(prev, node.id, createNode("Nouveau sibling")));
+          onUpdateTree((prev) =>
+            insertSiblingById(prev, node.id, createNode("Nouveau sibling")),
+          );
         }
 
         function handleDelete() {
-          if (!window.confirm(`Supprimer \"${node.label || 'cet item'}\" et ses enfants ?`)) return;
+          if (
+            !window.confirm(
+              `Supprimer \"${node.label || "cet item"}\" et ses enfants ?`,
+            )
+          )
+            return;
           onUpdateTree((prev) => removeNodeById(prev, node.id));
         }
 
@@ -507,9 +1180,18 @@
           onUpdateTree((prev) => toggleCheckedById(prev, node.id, checked));
         }
 
+        function handleMove(direction) {
+          onUpdateTree((prev) => moveNodeById(prev, node.id, direction));
+        }
+
         return (
-          <div className={`tree-line ${depth === 0 ? "root" : ""}`} style={{ paddingLeft: depth === 0 ? 0 : 14 }}>
-            <div className="compact-node rounded-xl border border-base-200 bg-base-100 hover:border-base-300 transition-colors">
+          <div
+            className={`tree-node-wrap ${depth > 0 ? "tree-child-row" : ""}`}
+          >
+            <div
+              className={`compact-node rounded-xl border border-base-200 bg-base-100 hover:border-base-300 transition-colors node-depth-shadow-${Math.min(depth, 5)}`}
+              style={{ marginLeft: depth === 0 ? 0 : depth * 6 }}
+            >
               <div className="flex items-start gap-1.5 p-2">
                 <button
                   className={`btn btn-xs btn-ghost mt-0.5 ${hasChildren ? "visible" : "invisible"}`}
@@ -541,28 +1223,64 @@
                     />
                   ) : (
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                      <span className={`font-medium text-sm leading-5 ${node.checked ? "line-through text-base-content/50" : ""}`}>
-                        {node.label || <span className="italic text-base-content/40">Sans titre</span>}
+                      <span
+                        className={`font-medium text-sm leading-5 ${node.checked ? "line-through text-base-content/50" : ""}`}
+                      >
+                        {node.label || (
+                          <span className="italic text-base-content/40">
+                            Sans titre
+                          </span>
+                        )}
                       </span>
                       {hasChildren && (
-                        <span className="badge badge-neutral badge-sm">{node.children.length}</span>
+                        <span className="badge badge-neutral badge-sm">
+                          {node.children.length}
+                        </span>
                       )}
                     </div>
                   )}
 
                   {mode === "edit" && (
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      <button className="btn btn-xs btn-outline btn-primary" onClick={handleAddChild}>
+                      <button
+                        className="btn btn-xs btn-outline btn-primary"
+                        onClick={handleAddChild}
+                      >
                         + Child
                       </button>
-                      <button className="btn btn-xs btn-outline" onClick={handleAddSibling}>
+                      <button
+                        className="btn btn-xs btn-outline"
+                        onClick={handleAddSibling}
+                      >
                         + Sibling
                       </button>
-                      <button className="btn btn-xs btn-outline btn-error" onClick={handleDelete}>
+                      <button
+                        className="btn btn-xs btn-outline btn-error"
+                        onClick={handleDelete}
+                      >
                         Supprimer
                       </button>
-                      <button className="btn btn-xs btn-ghost" onClick={handleToggleExpand}>
+                      <button
+                        className="btn btn-xs btn-ghost"
+                        onClick={handleToggleExpand}
+                      >
                         {node.expanded ? "Replier" : "Déplier"}
+                      </button>
+                      <button
+                        className="btn btn-xs btn-ghost"
+                        onClick={() => handleMove("up")}
+                        disabled={!canMoveUp}
+                        title="Monter parmi les siblings"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="btn btn-xs btn-ghost"
+                        onClick={() => handleMove("down")}
+                        disabled={!canMoveDown}
+                        title="Descendre parmi les siblings"
+                      >
+                        ↓
                       </button>
                     </div>
                   )}
@@ -571,12 +1289,12 @@
             </div>
 
             {node.expanded && hasChildren && (
-              <div className="mt-1.5 compact-stack space-y-2">
+              <div className="tree-children compact-stack space-y-2">
                 {node.children.map((child) => (
                   <TreeNode
                     key={child.id}
                     node={child}
-                    rootNodes={rootNodes}
+                    allNodes={allNodes}
                     mode={mode}
                     depth={depth + 1}
                     onUpdateTree={onUpdateTree}
