@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Checklist arborescente locale</title>
+    <title>#TODO list tree</title>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link
@@ -26,7 +26,7 @@
 
       body {
         background: linear-gradient(180deg, #fafafa 0%, #f4f6f8 100%);
-        font-size: 14px;
+        font-size: 13px;
       }
 
       textarea.code-json {
@@ -45,28 +45,28 @@
       }
 
       .compact-node .input {
-        height: 2rem;
+        height: 1.8rem;
       }
 
       .compact-node .btn.btn-xs {
-        height: 1.5rem;
-        min-height: 1.5rem;
-        padding-left: 0.45rem;
-        padding-right: 0.45rem;
-        font-size: 0.7rem;
+        height: 1.35rem;
+        min-height: 1.35rem;
+        padding-left: 0.35rem;
+        padding-right: 0.35rem;
+        font-size: 0.65rem;
       }
 
       .compact-node .badge {
-        height: 1.1rem;
-        min-height: 1.1rem;
-        font-size: 0.65rem;
-        padding-left: 0.35rem;
-        padding-right: 0.35rem;
+        height: 1rem;
+        min-height: 1rem;
+        font-size: 0.62rem;
+        padding-left: 0.3rem;
+        padding-right: 0.3rem;
       }
 
       .compact-node .checkbox {
-        width: 1rem;
-        height: 1rem;
+        width: 0.95rem;
+        height: 0.95rem;
       }
 
       .node-row-hover {
@@ -90,7 +90,7 @@
       }
 
       .compact-stack {
-        gap: 0.4rem;
+        gap: 0.28rem;
       }
 
       .tree-node-wrap {
@@ -99,8 +99,8 @@
 
       .tree-children {
         position: relative;
-        margin-top: 0.45rem;
-        padding-left: 2.1rem;
+        margin-top: 0.22rem;
+        padding-left: 1.85rem;
       }
 
       .tree-child-row {
@@ -110,28 +110,28 @@
       .tree-child-row::before {
         content: "";
         position: absolute;
-        left: -1.35rem;
-        top: -0.45rem;
-        bottom: -0.45rem;
+        left: -1.2rem;
+        top: -0.28rem;
+        bottom: -0.28rem;
         width: 2px;
-        background: linear-gradient(180deg, rgba(148, 163, 184, 0.45) 0%, rgba(148, 163, 184, 0.18) 100%);
+        background: rgba(148, 163, 184, 1);
         border-radius: 999px;
       }
 
       .tree-child-row::after {
         content: "";
         position: absolute;
-        left: -1.35rem;
-        top: 1rem;
-        width: 0.95rem;
+        left: -1.2rem;
+        top: 0.88rem;
+        width: 1.25rem;
         height: 2px;
-        background: rgba(148, 163, 184, 0.35);
+        background: rgba(148, 163, 184, 1);
         border-radius: 999px;
       }
 
       .tree-child-row.last-child::before {
         bottom: auto;
-        height: 1.45rem;
+        height: 1.16rem;
       }
 
       .node-depth-shadow-0 {
@@ -145,6 +145,37 @@
       .node-depth-shadow-5 {
         box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
       }
+
+      .json-modal-box {
+        max-height: calc(100vh - 1rem);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .json-modal-content {
+        min-height: 0;
+        overflow-y: auto;
+      }
+
+      @media (max-width: 767px) {
+        .node-actions-reveal {
+          opacity: 1;
+          pointer-events: auto;
+        }
+
+        .tree-children {
+          padding-left: 1.45rem;
+        }
+
+        .tree-child-row::before {
+          left: -0.95rem;
+        }
+
+        .tree-child-row::after {
+          left: -0.95rem;
+          width: 1rem;
+        }
+      }
     </style>
   </head>
   <body>
@@ -156,7 +187,7 @@
       const STORAGE_PREFIX = "xavier-test-tree-v2_";
       const PROJECTS_STORAGE_KEY = "xavier-test-tree-v2_projects";
       const ACTIVE_PROJECT_STORAGE_KEY = "xavier-test-tree-v2_active_project";
-      const DRIVE_CLIENT_ID_STORAGE_KEY = "928667781462-tacjm7ul8ck85s8ve3al48nc3j2ifbea.apps.googleusercontent.com";
+      const DRIVE_CLIENT_ID_STORAGE_KEY = "xavier-test-tree-v2_drive_client_id";
       const DRIVE_FILE_NAME = "xavier-test-tree-all-projects.json";
       const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
 
@@ -534,13 +565,15 @@
         const [filter, setFilter] = useState("");
         const [jsonDraft, setJsonDraft] = useState("");
         const [allProjectsDraft, setAllProjectsDraft] = useState("");
-        const [jsonTab, setJsonTab] = useState("current");
+        const [jsonTab, setJsonTab] = useState("drive");
         const [showJsonModal, setShowJsonModal] = useState(false);
         const [newProjectName, setNewProjectName] = useState("");
         const [editingProjectCode, setEditingProjectCode] = useState(null);
         const [editingProjectName, setEditingProjectName] = useState("");
 
-        const [driveClientId, setDriveClientId] = useState(() => localStorage.getItem(DRIVE_CLIENT_ID_STORAGE_KEY) || "");
+        const [driveClientId, setDriveClientId] = useState(
+          () => localStorage.getItem(DRIVE_CLIENT_ID_STORAGE_KEY) || ""
+        );
         const [driveAccessToken, setDriveAccessToken] = useState("");
         const [driveStatus, setDriveStatus] = useState("Déconnecté");
         const [driveBusy, setDriveBusy] = useState(false);
@@ -602,11 +635,12 @@
         }, [driveClientId]);
 
         function addRoot() {
+          setFilter("");
           setTree((prev) => [...prev, createNode("Nouvelle section")]);
         }
 
         function resetAll() {
-          if (!window.confirm(`Réinitialiser toutes les données du projet \"${activeProject.name}\" ?`)) return;
+          if (!window.confirm(`Réinitialiser toutes les données du projet "${activeProject.name}" ?`)) return;
           setTree(cloneDefaultData());
         }
 
@@ -703,7 +737,7 @@
           }
 
           if (projects.some((project) => project.code === code)) {
-            alert(`Le projet \"${code}\" existe déjà.`);
+            alert(`Le projet "${code}" existe déjà.`);
             return;
           }
 
@@ -737,7 +771,7 @@
 
           const duplicate = projects.find((item) => item.code === nextCode && item.code !== project.code);
           if (duplicate) {
-            alert(`Le projet \"${nextCode}\" existe déjà.`);
+            alert(`Le projet "${nextCode}" existe déjà.`);
             return;
           }
 
@@ -763,7 +797,7 @@
         }
 
         function handleDeleteProject(project) {
-          if (!window.confirm(`Supprimer le projet \"${project.name}\" et ses données locales ?`)) return;
+          if (!window.confirm(`Supprimer le projet "${project.name}" et ses données locales ?`)) return;
 
           const nextProjects = projects.filter((item) => item.code !== project.code);
           localStorage.removeItem(makeProjectStorageKey(project.code));
@@ -991,18 +1025,15 @@
 
         return (
           <>
-            <div className="min-h-full p-4 md:p-8">
-              <div className="mx-auto max-w-7xl space-y-4">
+            <div className="min-h-full p-3 md:p-6">
+              <div className="mx-auto max-w-7xl space-y-3">
                 <div className="compact-card rounded-3xl bg-base-100 shadow-xl border border-base-200">
-                  <div className="p-4 md:p-5 space-y-3">
+                  <div className="p-3 md:p-4 space-y-3">
                     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                       <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
-                        <h1 className="text-lg md:text-xl font-bold tracking-tight">Checklist arborescente locale</h1>
+                        <h1 className="text-lg md:text-xl font-bold tracking-tight">#TODO list tree</h1>
                         <span className="badge badge-outline badge-sm">{activeProject.name}</span>
-                        <code className="rounded bg-base-200 px-2 py-1 text-[11px]">
-                          {makeProjectStorageKey(activeProject.code)}
-                        </code>
-                        <div className="rounded-2xl border border-base-200 bg-base-50 px-3 py-1.5 text-sm flex flex-wrap items-center gap-3">
+                        <div className="rounded-2xl border border-base-200 bg-base-50 px-3 py-1 text-xs md:text-sm flex flex-wrap items-center gap-3">
                           <span><span className="font-semibold">Éléments</span> {stats.total}</span>
                           <span><span className="font-semibold">Cochés</span> {stats.done}</span>
                           <span><span className="font-semibold">Progression</span> {stats.percent}%</span>
@@ -1028,7 +1059,7 @@
                           </>
                         )}
 
-                        <label className="input input-bordered input-sm flex items-center gap-2 w-52">
+                        <label className="input input-bordered input-sm flex items-center gap-2 w-44 md:w-52">
                           <span className="text-xs opacity-70">🔎</span>
                           <input
                             type="text"
@@ -1063,9 +1094,6 @@
                           JSON
                         </button>
 
-                        <button className="btn btn-outline btn-sm" onClick={downloadJson}>
-                          Exporter
-                        </button>
                         <button className="btn btn-outline btn-warning btn-sm" onClick={resetAll}>
                           Reset
                         </button>
@@ -1112,10 +1140,9 @@
                                 <button
                                   className={`join-item btn btn-sm ${isActive ? "btn-primary" : "btn-outline"}`}
                                   onClick={() => setActiveProjectCode(project.code)}
-                                  title={`${project.name} (${project.code})`}
+                                  title={project.name}
                                 >
                                   <span>{project.name}</span>
-                                  <span className="opacity-70 text-xs">{project.code}</span>
                                 </button>
                                 {mode === "edit" && (
                                   <button
@@ -1144,28 +1171,28 @@
                   </div>
                 </div>
 
-                <div className="compact-card rounded-3xl bg-base-100 p-3 md:p-4 shadow-xl border border-base-200">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="compact-card rounded-3xl bg-base-100 p-2.5 md:p-3.5 shadow-xl border border-base-200">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h2 className="text-xl font-semibold">
+                      <h2 className="text-lg md:text-xl font-semibold">
                         {mode === "edit" ? "Arborescence en édition" : "Arborescence d'exécution"}
                       </h2>
-                      <p className="text-sm text-base-content/70 mt-1">
+                      <p className="text-xs md:text-sm text-base-content/70 mt-0.5">
                         {mode === "edit"
                           ? "Ajoute des siblings, des children, renomme, supprime et réorganise la structure à la main."
                           : "Coche les cases pendant tes tests. Cocher un parent propage la valeur à tous ses enfants."}
                       </p>
                     </div>
                     {mode === "edit" && (
-                      <button className="btn btn-primary" onClick={addRoot}>
+                      <button className="btn btn-primary btn-sm" onClick={addRoot}>
                         + Racine
                       </button>
                     )}
                   </div>
 
-                  <div className="compact-stack space-y-2">
+                  <div className="compact-stack space-y-1.5">
                     {filteredTree.length === 0 ? (
-                      <div className="alert">
+                      <div className="alert py-2">
                         <span>Aucun élément à afficher.</span>
                       </div>
                     ) : (
@@ -1187,8 +1214,8 @@
 
             {showJsonModal && (
               <div className="modal modal-open">
-                <div className="modal-box max-w-5xl p-0 overflow-hidden">
-                  <div className="flex items-center justify-between border-b border-base-200 px-5 py-4">
+                <div className="modal-box w-[calc(100vw-1rem)] max-w-5xl p-0 overflow-hidden json-modal-box">
+                  <div className="flex items-center justify-between border-b border-base-200 px-4 py-3 md:px-5 md:py-4 shrink-0">
                     <div>
                       <h3 className="text-lg font-semibold">JSON et synchronisation</h3>
                       <p className="text-sm text-base-content/70 mt-1">
@@ -1200,7 +1227,7 @@
                     </button>
                   </div>
 
-                  <div className="p-5 space-y-4">
+                  <div className="p-4 md:p-5 space-y-4 json-modal-content">
                     <div className="join flex-wrap">
                       <button
                         className={`join-item btn btn-sm ${jsonTab === "current" ? "btn-primary" : "btn-ghost"}`}
@@ -1225,13 +1252,13 @@
                     {jsonTab === "current" && (
                       <>
                         <textarea
-                          className="textarea textarea-bordered w-full h-[420px] code-json text-xs leading-5"
+                          className="textarea textarea-bordered w-full h-[50vh] md:h-[420px] code-json text-xs leading-5"
                           value={jsonDraft}
                           onChange={(e) => setJsonDraft(e.target.value)}
                           spellCheck={false}
                         />
 
-                        <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-3 pb-1">
                           <button className="btn btn-primary" onClick={importJson}>
                             Importer ce JSON
                           </button>
@@ -1251,13 +1278,13 @@
                           Import global : les projets du même code sont écrasés, les autres sont ajoutés.
                         </div>
                         <textarea
-                          className="textarea textarea-bordered w-full h-[420px] code-json text-xs leading-5"
+                          className="textarea textarea-bordered w-full h-[50vh] md:h-[420px] code-json text-xs leading-5"
                           value={allProjectsDraft}
                           onChange={(e) => setAllProjectsDraft(e.target.value)}
                           spellCheck={false}
                         />
 
-                        <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-3 pb-1">
                           <button className="btn btn-primary" onClick={importAllProjects}>
                             Importer tous les projets
                           </button>
@@ -1272,7 +1299,7 @@
                     )}
 
                     {jsonTab === "drive" && (
-                      <div className="space-y-4">
+                      <div className="space-y-4 pb-1">
                         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                           <label className="form-control">
                             <div className="label py-1">
@@ -1387,7 +1414,7 @@
         }
 
         function handleDelete() {
-          if (!window.confirm(`Supprimer \"${node.label || "cet item"}\" et ses enfants ?`)) return;
+          if (!window.confirm(`Supprimer "${node.label || "cet item"}" et ses enfants ?`)) return;
           onUpdateTree((prev) => removeNodeById(prev, node.id));
         }
 
@@ -1402,12 +1429,12 @@
         return (
           <div className={`tree-node-wrap ${depth > 0 ? "tree-child-row" : ""} ${depth > 0 && isLastChild ? "last-child" : ""}`}>
             <div
-              className={`compact-node rounded-xl border border-base-200 bg-base-100 hover:border-base-300 transition-colors node-depth-shadow-${Math.min(depth, 5)}`}
-              style={{ marginLeft: depth === 0 ? 0 : depth * 6 }}
+              className={`compact-node rounded-lg border border-base-200 bg-base-100 hover:border-base-300 transition-colors node-depth-shadow-${Math.min(depth, 5)}`}
+              style={{ marginLeft: depth === 0 ? 0 : depth * 4 }}
             >
-              <div className="node-row-hover flex items-center gap-1.5 p-2 rounded-xl">
+              <div className="node-row-hover flex items-start gap-1.5 p-1.5 rounded-lg">
                 <button
-                  className={`btn btn-xs btn-ghost mt-0.5 ${hasChildren ? "visible" : "invisible"}`}
+                  className={`btn btn-xs btn-ghost mt-[1px] ${hasChildren ? "visible" : "invisible"}`}
                   onClick={handleToggleExpand}
                   title={node.expanded ? "Replier" : "Déplier"}
                 >
@@ -1417,17 +1444,17 @@
                 {mode === "view" ? (
                   <input
                     type="checkbox"
-                    className="checkbox checkbox-primary mt-0.5"
+                    className="checkbox checkbox-primary mt-[3px]"
                     checked={node.checked}
                     onChange={(e) => handleCheck(e.target.checked)}
                   />
                 ) : (
-                  <div className="badge badge-outline mt-0.5">{depth}</div>
+                  <div className="badge badge-outline mt-[2px]">{depth}</div>
                 )}
 
                 <div className="min-w-0 flex-1">
                   {mode === "edit" ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-1 md:flex-row md:items-center md:gap-2">
                       <input
                         type="text"
                         className="input input-bordered input-sm min-w-0 flex-1 text-sm"
@@ -1436,7 +1463,7 @@
                         placeholder="Libellé"
                       />
 
-                      <div className="node-actions-reveal flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                      <div className="node-actions-reveal flex shrink-0 flex-wrap items-center gap-1 md:justify-end">
                         <button className="btn btn-xs btn-outline btn-primary" onClick={handleAddChild}>
                           + Child
                         </button>
@@ -1468,8 +1495,8 @@
                       </div>
                     </div>
                   ) : (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                      <span className={`font-medium text-sm leading-5 ${node.checked ? "line-through text-base-content/50" : ""}`}>
+                    <div className="flex flex-wrap items-center gap-1 pt-[1px]">
+                      <span className={`font-medium text-sm leading-4 ${node.checked ? "line-through text-base-content/50" : ""}`}>
                         {node.label || <span className="italic text-base-content/40">Sans titre</span>}
                       </span>
                       {hasChildren && <span className="badge badge-neutral badge-sm">{node.children.length}</span>}
@@ -1480,7 +1507,7 @@
             </div>
 
             {node.expanded && hasChildren && (
-              <div className="tree-children compact-stack space-y-2">
+              <div className="tree-children compact-stack space-y-1.5">
                 {node.children.map((child, childIndex) => (
                   <TreeNode
                     key={child.id}
