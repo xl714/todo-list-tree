@@ -1,0 +1,1405 @@
+const { useEffect, useMemo, useRef, useState } = React;
+
+const STORAGE_PREFIX = "xavier-test-tree-v2_";
+const PROJECTS_STORAGE_KEY = "xavier-test-tree-v2_projects";
+const ACTIVE_PROJECT_STORAGE_KEY = "xavier-test-tree-v2_active_project";
+const DRIVE_CLIENT_ID_STORAGE_KEY = "xavier-test-tree-v2_drive_client_id";
+const DRIVE_FILE_NAME = "xavier-test-tree-all-projects.json";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function createNode(label = "Nouvel item") {
+  return {
+    id: uid(),
+    label,
+    checked: false,
+    expanded: true,
+    children: [],
+  };
+}
+
+const DEFAULT_DATA = [
+  {
+    id: uid(),
+    label: "Lorem",
+    checked: false,
+    expanded: true,
+    children: [createNode("Ipsum")],
+  },
+];
+
+function cloneDefaultData() {
+  return DEFAULT_DATA.map(normalizeNode);
+}
+
+function normalizeNode(node) {
+  return {
+    id: node?.id || uid(),
+    label: typeof node?.label === "string" ? node.label : "",
+    checked: Boolean(node?.checked),
+    expanded: node?.expanded !== false,
+    children: Array.isArray(node?.children) ? node.children.map(normalizeNode) : [],
+  };
+}
+
+function cloneNodeDeepWithNewIds(node) {
+  return {
+    ...node,
+    id: uid(),
+    children: Array.isArray(node.children) ? node.children.map(cloneNodeDeepWithNewIds) : [],
+  };
+}
+
+function markdownCheckbox(checked) {
+  return checked ? "[X]" : "[ ]";
+}
+
+function exportTreeToMarkdown(projectName, tree) {
+  function renderChildren(nodes, depth = 0) {
+    return nodes
+      .map((node) => {
+        const indent = "  ".repeat(depth);
+        const line = `${indent}- ${markdownCheckbox(node.checked)} ${node.label || "Sans titre"}`;
+        const children =
+          node.children.length > 0 ? "\n" + renderChildren(node.children, depth + 1) : "";
+        return line + children;
+      })
+      .join("\n");
+  }
+
+  const sections = tree.map((rootNode) => {
+    const title = `## ${markdownCheckbox(rootNode.checked)} ${rootNode.label || "Sans titre"}`;
+    const children =
+      rootNode.children.length > 0 ? "\n\n" + renderChildren(rootNode.children, 0) : "";
+    return title + children;
+  });
+
+  return `# TODO ${projectName}\n\n${sections.join("\n\n")}`;
+}
+
+function normalizeProjectName(name) {
+  return String(name || "").trim().replace(/\s+/g, " ");
+}
+
+function projectNameToCode(name) {
+  return normalizeProjectName(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function isValidProjectName(name) {
+  return /[a-z0-9]/i.test(name || "");
+}
+
+function makeProjectStorageKey(code) {
+  return `${STORAGE_PREFIX}${code}`;
+}
+
+function getDefaultProject() {
+  return {
+    name: "Default",
+    code: "default",
+  };
+}
+
+function normalizeProject(project) {
+  const name = normalizeProjectName(project?.name || "");
+  const code = projectNameToCode(project?.code || name);
+  if (!name || !code) return null;
+  return { name, code };
+}
+
+function saveProjects(projects) {
+  localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects, null, 2));
+}
+
+function loadProjects() {
+  try {
+    const raw = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    if (!raw) {
+      const fallback = [getDefaultProject()];
+      saveProjects(fallback);
+      return fallback;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      const fallback = [getDefaultProject()];
+      saveProjects(fallback);
+      return fallback;
+    }
+
+    const normalized = parsed
+      .map(normalizeProject)
+      .filter(Boolean)
+      .filter((project, index, arr) => arr.findIndex((p) => p.code === project.code) === index);
+
+    if (normalized.length === 0) {
+      const fallback = [getDefaultProject()];
+      saveProjects(fallback);
+      return fallback;
+    }
+
+    return normalized;
+  } catch (err) {
+    console.error("Erreur de lecture des projets:", err);
+    const fallback = [getDefaultProject()];
+    saveProjects(fallback);
+    return fallback;
+  }
+}
+
+function loadActiveProjectCode(projects) {
+  const stored = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+  if (stored && projects.some((project) => project.code === stored)) {
+    return stored;
+  }
+  const firstCode = projects[0]?.code || getDefaultProject().code;
+  localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, firstCode);
+  return firstCode;
+}
+
+function saveActiveProjectCode(code) {
+  localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, code);
+}
+
+function loadTree(projectCode) {
+  try {
+    const raw = localStorage.getItem(makeProjectStorageKey(projectCode));
+    if (!raw) return cloneDefaultData();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return cloneDefaultData();
+    return parsed.map(normalizeNode);
+  } catch (err) {
+    console.error("Erreur de lecture localStorage:", err);
+    return cloneDefaultData();
+  }
+}
+
+function saveTree(projectCode, tree) {
+  localStorage.setItem(makeProjectStorageKey(projectCode), JSON.stringify(tree, null, 2));
+}
+
+function exportJson(tree) {
+  return JSON.stringify(tree, null, 2);
+}
+
+function exportAllProjects(projects) {
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    projects: projects.map((project) => ({
+      name: project.name,
+      code: project.code,
+      tree: loadTree(project.code),
+    })),
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function parseAllProjectsJson(raw) {
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.projects)) {
+    throw new Error("Format global invalide");
+  }
+
+  return parsed.projects
+    .map((item) => {
+      const name = normalizeProjectName(item?.name || "");
+      const code = projectNameToCode(item?.code || name);
+      if (!name || !code) return null;
+      return {
+        name,
+        code,
+        tree: Array.isArray(item?.tree) ? item.tree.map(normalizeNode) : cloneDefaultData(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function formatDateTime(dateString) {
+  if (!dateString) return "-";
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return dateString;
+  return date.toLocaleString("fr-FR");
+}
+
+function compareIsoDates(a, b) {
+  if (!a && !b) return 0;
+  if (a && !b) return 1;
+  if (!a && b) return -1;
+  const t1 = new Date(a).getTime();
+  const t2 = new Date(b).getTime();
+  if (Number.isNaN(t1) || Number.isNaN(t2)) return 0;
+  if (t1 === t2) return 0;
+  return t1 > t2 ? 1 : -1;
+}
+
+function updateNodeById(nodes, nodeId, updater) {
+  return nodes.map((node) => {
+    if (node.id === nodeId) {
+      return updater(node);
+    }
+    if (node.children.length === 0) return node;
+    return {
+      ...node,
+      children: updateNodeById(node.children, nodeId, updater),
+    };
+  });
+}
+
+function insertSiblingById(nodes, nodeId, newNode) {
+  const result = [];
+  for (const node of nodes) {
+    if (node.id === nodeId) {
+      result.push(node, newNode);
+    } else {
+      result.push({
+        ...node,
+        children: insertSiblingById(node.children, nodeId, newNode),
+      });
+    }
+  }
+  return result;
+}
+
+function duplicateNodeAsSiblingById(nodes, nodeId) {
+  const result = [];
+  for (const node of nodes) {
+    if (node.id === nodeId) {
+      result.push(node, cloneNodeDeepWithNewIds(node));
+    } else {
+      result.push({
+        ...node,
+        children: duplicateNodeAsSiblingById(node.children, nodeId),
+      });
+    }
+  }
+  return result;
+}
+
+function addChildById(nodes, nodeId, newNode) {
+  return nodes.map((node) => {
+    if (node.id === nodeId) {
+      return {
+        ...node,
+        expanded: true,
+        children: [...node.children, newNode],
+      };
+    }
+    return {
+      ...node,
+      children: addChildById(node.children, nodeId, newNode),
+    };
+  });
+}
+
+function removeNodeById(nodes, nodeId) {
+  return nodes
+    .filter((node) => node.id !== nodeId)
+    .map((node) => ({
+      ...node,
+      children: removeNodeById(node.children, nodeId),
+    }));
+}
+
+function setCheckedDeep(node, checked) {
+  return {
+    ...node,
+    checked,
+    children: node.children.map((child) => setCheckedDeep(child, checked)),
+  };
+}
+
+function toggleCheckedById(nodes, nodeId, checked) {
+  return nodes.map((node) => {
+    if (node.id === nodeId) {
+      return setCheckedDeep(node, checked);
+    }
+    return {
+      ...node,
+      children: toggleCheckedById(node.children, nodeId, checked),
+    };
+  });
+}
+
+function moveItemInArray(items, fromIndex, toIndex) {
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length ||
+    fromIndex === toIndex
+  ) {
+    return items;
+  }
+
+  const next = [...items];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+function moveNodeById(nodes, nodeId, direction) {
+  const index = nodes.findIndex((node) => node.id === nodeId);
+
+  if (index !== -1) {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    return moveItemInArray(nodes, index, targetIndex);
+  }
+
+  return nodes.map((node) => ({
+    ...node,
+    children: moveNodeById(node.children, nodeId, direction),
+  }));
+}
+
+function canMoveNode(nodes, nodeId, direction) {
+  const index = nodes.findIndex((node) => node.id === nodeId);
+
+  if (index !== -1) {
+    if (direction === "up") return index > 0;
+    return index < nodes.length - 1;
+  }
+
+  for (const node of nodes) {
+    if (node.children.length > 0) {
+      const childCanMove = canMoveNode(node.children, nodeId, direction);
+      if (childCanMove !== null) return childCanMove;
+    }
+  }
+
+  return null;
+}
+
+function countStats(nodes) {
+  let total = 0;
+  let done = 0;
+
+  function walk(list) {
+    for (const node of list) {
+      total += 1;
+      if (node.checked) done += 1;
+      walk(node.children);
+    }
+  }
+
+  walk(nodes);
+  return { total, done, percent: total ? Math.round((done / total) * 100) : 0 };
+}
+
+function App() {
+  const [projects, setProjects] = useState(() => loadProjects());
+  const [activeProjectCode, setActiveProjectCode] = useState(() => {
+    const initialProjects = loadProjects();
+    return loadActiveProjectCode(initialProjects);
+  });
+  const [tree, setTree] = useState(() => {
+    const initialProjects = loadProjects();
+    const initialCode = loadActiveProjectCode(initialProjects);
+    return loadTree(initialCode);
+  });
+
+  const [mode, setMode] = useState("view");
+  const [filter, setFilter] = useState("");
+  const [jsonDraft, setJsonDraft] = useState("");
+  const [markdownDraft, setMarkdownDraft] = useState("");
+  const [allProjectsDraft, setAllProjectsDraft] = useState("");
+  const [jsonTab, setJsonTab] = useState("drive");
+  const [showJsonModal, setShowJsonModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [editingProjectCode, setEditingProjectCode] = useState(null);
+  const [editingProjectName, setEditingProjectName] = useState("");
+
+  const [driveClientId, setDriveClientId] = useState(
+    () => localStorage.getItem(DRIVE_CLIENT_ID_STORAGE_KEY) || ""
+  );
+  const [driveAccessToken, setDriveAccessToken] = useState("");
+  const [driveStatus, setDriveStatus] = useState("Déconnecté");
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveMessage, setDriveMessage] = useState("");
+  const [driveSyncInfo, setDriveSyncInfo] = useState(null);
+  const tokenClientRef = useRef(null);
+
+  const stats = useMemo(() => countStats(tree), [tree]);
+  const activeProject = useMemo(() => {
+    return projects.find((project) => project.code === activeProjectCode) || projects[0] || getDefaultProject();
+  }, [projects, activeProjectCode]);
+
+  const filteredTree = useMemo(() => {
+    const term = filter.trim().toLowerCase();
+    if (!term) return tree;
+
+    function filterNodes(nodes) {
+      const result = [];
+      for (const node of nodes) {
+        const childMatches = filterNodes(node.children);
+        const selfMatches = node.label.toLowerCase().includes(term);
+        if (selfMatches || childMatches.length > 0) {
+          result.push({
+            ...node,
+            expanded: true,
+            children: childMatches,
+          });
+        }
+      }
+      return result;
+    }
+
+    return filterNodes(tree);
+  }, [tree, filter]);
+
+  useEffect(() => {
+    saveProjects(projects);
+  }, [projects]);
+
+  useEffect(() => {
+    if (!activeProjectCode) return;
+    saveActiveProjectCode(activeProjectCode);
+    setTree(loadTree(activeProjectCode));
+    setFilter("");
+  }, [activeProjectCode]);
+
+  useEffect(() => {
+    if (!activeProjectCode) return;
+    saveTree(activeProjectCode, tree);
+    setJsonDraft(exportJson(tree));
+  }, [tree, activeProjectCode]);
+
+  useEffect(() => {
+    setMarkdownDraft(exportTreeToMarkdown(activeProject.name, tree));
+  }, [tree, activeProject]);
+
+  useEffect(() => {
+    setAllProjectsDraft(exportAllProjects(projects));
+  }, [projects, tree, activeProjectCode]);
+
+  useEffect(() => {
+    localStorage.setItem(DRIVE_CLIENT_ID_STORAGE_KEY, driveClientId.trim());
+  }, [driveClientId]);
+
+  function addRoot() {
+    setFilter("");
+    setTree((prev) => [...prev, createNode("Nouvelle section")]);
+  }
+
+  function importJson() {
+    try {
+      const parsed = JSON.parse(jsonDraft);
+      if (!Array.isArray(parsed)) {
+        alert("Le JSON doit être un tableau racine.");
+        return;
+      }
+      setTree(parsed.map(normalizeNode));
+      setShowJsonModal(false);
+    } catch (err) {
+      alert("JSON invalide.");
+    }
+  }
+
+  function importAllProjects() {
+    try {
+      const importedProjects = parseAllProjectsJson(allProjectsDraft);
+      if (importedProjects.length === 0) {
+        alert("Aucun projet valide trouvé dans le JSON global.");
+        return;
+      }
+
+      const mergedMap = new Map(projects.map((project) => [project.code, project]));
+
+      for (const imported of importedProjects) {
+        mergedMap.set(imported.code, { name: imported.name, code: imported.code });
+        saveTree(imported.code, imported.tree);
+      }
+
+      const nextProjects = Array.from(mergedMap.values());
+      setProjects(nextProjects);
+
+      if (!nextProjects.some((project) => project.code === activeProjectCode)) {
+        setActiveProjectCode(importedProjects[0].code);
+      } else if (importedProjects.some((project) => project.code === activeProjectCode)) {
+        setTree(loadTree(activeProjectCode));
+      }
+
+      setShowJsonModal(false);
+    } catch (err) {
+      alert("JSON global invalide.");
+    }
+  }
+
+  function applyImportedProjects(importedProjects) {
+    const mergedMap = new Map(projects.map((project) => [project.code, project]));
+
+    for (const imported of importedProjects) {
+      mergedMap.set(imported.code, { name: imported.name, code: imported.code });
+      saveTree(imported.code, imported.tree);
+    }
+
+    const nextProjects = Array.from(mergedMap.values());
+    setProjects(nextProjects);
+
+    if (!nextProjects.some((project) => project.code === activeProjectCode)) {
+      setActiveProjectCode(importedProjects[0].code);
+    } else if (importedProjects.some((project) => project.code === activeProjectCode)) {
+      setTree(loadTree(activeProjectCode));
+    }
+  }
+
+  function downloadJson() {
+    const filenameCode = activeProject?.code || "project";
+    const blob = new Blob([exportJson(tree)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `checklist-tree-${filenameCode}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadAllProjectsJson() {
+    const blob = new Blob([exportAllProjects(projects)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "checklist-tree-all-projects.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleCreateProject() {
+    const normalizedName = normalizeProjectName(newProjectName);
+    const code = projectNameToCode(normalizedName);
+
+    if (!isValidProjectName(normalizedName) || !code) {
+      alert("Le nom du projet doit contenir au moins un caractère alphanumérique.");
+      return;
+    }
+
+    if (projects.some((project) => project.code === code)) {
+      alert(`Le projet "${code}" existe déjà.`);
+      return;
+    }
+
+    const newProject = { name: normalizedName, code };
+    const newTree = cloneDefaultData();
+
+    setProjects((prev) => [...prev, newProject]);
+    saveTree(code, newTree);
+    setActiveProjectCode(code);
+    setNewProjectName("");
+  }
+
+  function handleStartRenameProject(project) {
+    setEditingProjectCode(project.code);
+    setEditingProjectName(project.name);
+  }
+
+  function handleCancelRenameProject() {
+    setEditingProjectCode(null);
+    setEditingProjectName("");
+  }
+
+  function handleConfirmRenameProject(project) {
+    const normalizedName = normalizeProjectName(editingProjectName);
+    const nextCode = projectNameToCode(normalizedName);
+
+    if (!isValidProjectName(normalizedName) || !nextCode) {
+      alert("Le nom du projet doit contenir au moins un caractère alphanumérique.");
+      return;
+    }
+
+    const duplicate = projects.find((item) => item.code === nextCode && item.code !== project.code);
+    if (duplicate) {
+      alert(`Le projet "${nextCode}" existe déjà.`);
+      return;
+    }
+
+    const renamedProject = { name: normalizedName, code: nextCode };
+    const oldStorageKey = makeProjectStorageKey(project.code);
+    const newStorageKey = makeProjectStorageKey(nextCode);
+    const raw = localStorage.getItem(oldStorageKey);
+
+    setProjects((prev) => prev.map((item) => (item.code === project.code ? renamedProject : item)));
+
+    if (raw !== null) {
+      localStorage.setItem(newStorageKey, raw);
+      if (newStorageKey !== oldStorageKey) {
+        localStorage.removeItem(oldStorageKey);
+      }
+    }
+
+    if (activeProjectCode === project.code) {
+      setActiveProjectCode(nextCode);
+    }
+
+    handleCancelRenameProject();
+  }
+
+  function handleDeleteProject(project) {
+    if (!window.confirm(`Supprimer le projet "${project.name}" et ses données locales ?`)) return;
+
+    const nextProjects = projects.filter((item) => item.code !== project.code);
+    localStorage.removeItem(makeProjectStorageKey(project.code));
+
+    if (nextProjects.length === 0) {
+      const fallback = [getDefaultProject()];
+      const fallbackTree = cloneDefaultData();
+      setProjects(fallback);
+      saveTree(fallback[0].code, fallbackTree);
+      setActiveProjectCode(fallback[0].code);
+      setTree(fallbackTree);
+      return;
+    }
+
+    setProjects(nextProjects);
+    if (activeProjectCode === project.code) {
+      setActiveProjectCode(nextProjects[0].code);
+    }
+  }
+
+  async function driveApiFetch(url, options = {}) {
+    if (!driveAccessToken) {
+      throw new Error("Pas de jeton Google Drive disponible.");
+    }
+
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${driveAccessToken}`,
+        ...(options.headers || {}),
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Erreur HTTP ${response.status}`);
+    }
+
+    return response;
+  }
+
+  async function findDriveFile() {
+    const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`);
+    const fields = encodeURIComponent("files(id,name,modifiedTime,size)");
+    const response = await driveApiFetch(
+      `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=${fields}`
+    );
+    const data = await response.json();
+    return data.files?.[0] || null;
+  }
+
+  async function downloadDriveFile(fileId) {
+    const response = await driveApiFetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
+    );
+    return response.text();
+  }
+
+  async function uploadDriveFile(existingFileId = null) {
+    const bodyText = exportAllProjects(projects);
+    const metadata = existingFileId
+      ? { name: DRIVE_FILE_NAME }
+      : { name: DRIVE_FILE_NAME, parents: ["appDataFolder"] };
+
+    const form = new FormData();
+    form.append(
+      "metadata",
+      new Blob([JSON.stringify(metadata)], { type: "application/json" })
+    );
+    form.append("file", new Blob([bodyText], { type: "application/json" }));
+
+    const method = existingFileId ? "PATCH" : "POST";
+    const endpoint = existingFileId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name,modifiedTime`
+      : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime`;
+
+    const response = await driveApiFetch(endpoint, {
+      method,
+      body: form,
+    });
+
+    return response.json();
+  }
+
+  async function handleConnectDrive() {
+    const clientId = driveClientId.trim();
+    if (!clientId) {
+      alert("Renseigne d'abord le Google OAuth Client ID.");
+      return;
+    }
+
+    if (!window.google?.accounts?.oauth2) {
+      alert("Google Identity Services n'est pas encore chargé.");
+      return;
+    }
+
+    setDriveBusy(true);
+    setDriveMessage("");
+
+    try {
+      const accessToken = await new Promise((resolve, reject) => {
+        tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: DRIVE_SCOPE,
+          callback: (response) => {
+            if (response?.access_token) {
+              resolve(response.access_token);
+            } else {
+              reject(new Error(response?.error || "Accès Google refusé."));
+            }
+          },
+          error_callback: (error) => {
+            reject(new Error(error?.message || "Erreur Google Identity Services"));
+          },
+        });
+
+        tokenClientRef.current.requestAccessToken({ prompt: "consent" });
+      });
+
+      setDriveAccessToken(accessToken);
+      setDriveStatus("Connecté");
+      setDriveMessage("Connexion Google Drive OK.");
+    } catch (err) {
+      setDriveStatus("Déconnecté");
+      setDriveMessage(err.message || "Connexion Google Drive impossible.");
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
+  async function handleCheckDriveSync() {
+    setDriveBusy(true);
+    setDriveMessage("");
+
+    try {
+      const localRaw = exportAllProjects(projects);
+      const localParsed = JSON.parse(localRaw);
+      const driveFile = await findDriveFile();
+
+      if (!driveFile) {
+        setDriveSyncInfo({
+          localExportedAt: localParsed.exportedAt || null,
+          localProjectCount: localParsed.projects?.length || 0,
+          driveFileId: null,
+          driveModifiedTime: null,
+          driveExportedAt: null,
+          driveProjectCount: 0,
+          driveMissing: true,
+          comparison: 1,
+          drivePayloadRaw: null,
+        });
+        setDriveMessage("Aucun fichier de synchro trouvé dans appDataFolder.");
+        return;
+      }
+
+      const driveRaw = await downloadDriveFile(driveFile.id);
+      const driveParsed = JSON.parse(driveRaw);
+      const comparison = compareIsoDates(
+        localParsed.exportedAt,
+        driveParsed.exportedAt || driveFile.modifiedTime
+      );
+
+      setDriveSyncInfo({
+        localExportedAt: localParsed.exportedAt || null,
+        localProjectCount: localParsed.projects?.length || 0,
+        driveFileId: driveFile.id,
+        driveModifiedTime: driveFile.modifiedTime || null,
+        driveExportedAt: driveParsed.exportedAt || null,
+        driveProjectCount: Array.isArray(driveParsed.projects) ? driveParsed.projects.length : 0,
+        driveMissing: false,
+        comparison,
+        drivePayloadRaw: driveRaw,
+      });
+
+      if (comparison > 0) {
+        setDriveMessage("La version locale semble plus récente.");
+      } else if (comparison < 0) {
+        setDriveMessage("La version Drive semble plus récente.");
+      } else {
+        setDriveMessage("Les versions locale et Drive semblent identiques.");
+      }
+    } catch (err) {
+      setDriveMessage(err.message || "Impossible de vérifier la synchro Drive.");
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
+  async function handleImportFromDrive() {
+    if (!driveSyncInfo?.drivePayloadRaw) {
+      alert("Vérifie d'abord la synchro Drive.");
+      return;
+    }
+
+    setDriveBusy(true);
+    setDriveMessage("");
+
+    try {
+      const importedProjects = parseAllProjectsJson(driveSyncInfo.drivePayloadRaw);
+      if (importedProjects.length === 0) {
+        throw new Error("Aucun projet valide trouvé dans le fichier Drive.");
+      }
+      applyImportedProjects(importedProjects);
+      setDriveMessage("Import depuis Drive effectué.");
+      await handleCheckDriveSync();
+    } catch (err) {
+      setDriveMessage(err.message || "Import Drive impossible.");
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
+  async function handleUploadToDrive() {
+    setDriveBusy(true);
+    setDriveMessage("");
+
+    try {
+      const existing = await findDriveFile();
+      await uploadDriveFile(existing?.id || null);
+      setDriveMessage(
+        existing
+          ? "Version Drive écrasée avec la version locale."
+          : "Version locale envoyée vers Drive."
+      );
+      await handleCheckDriveSync();
+    } catch (err) {
+      setDriveMessage(err.message || "Upload Drive impossible.");
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="min-h-full p-3 md:p-6">
+        <div className="mx-auto max-w-7xl space-y-3">
+          <div className="compact-card rounded-3xl bg-base-100 shadow-xl border border-base-200">
+            <div className="p-3 md:p-4 space-y-3">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="min-w-0 flex-1 flex flex-wrap items-center gap-2">
+                  <h1 className="text-lg md:text-xl font-bold tracking-tight">#TODO list tree</h1>
+                  <span className="badge badge-outline badge-sm">{activeProject.name}</span>
+                  <div className="rounded-2xl border border-base-200 bg-base-50 px-3 py-1 text-xs md:text-sm flex flex-wrap items-center gap-3">
+                    <span>
+                      <span className="font-semibold">Éléments</span> {stats.total}
+                    </span>
+                    <span>
+                      <span className="font-semibold">Cochés</span> {stats.done}
+                    </span>
+                    <span>
+                      <span className="font-semibold">Progression</span> {stats.percent}%
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {mode === "edit" && editingProjectCode === null && (
+                    <>
+                      <input
+                        type="text"
+                        className="input input-bordered input-sm w-44"
+                        placeholder="Nouveau projet"
+                        value={newProjectName}
+                        onChange={(e) => setNewProjectName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleCreateProject();
+                        }}
+                      />
+                      <button className="btn btn-sm btn-primary" onClick={handleCreateProject}>
+                        + Projet
+                      </button>
+                    </>
+                  )}
+
+                  <label className="input input-bordered input-sm flex items-center gap-2 w-44 md:w-52">
+                    <span className="text-xs opacity-70">🔎</span>
+                    <input
+                      type="text"
+                      className="grow"
+                      placeholder="Recherche..."
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                    />
+                  </label>
+
+                  <div className="join">
+                    <button
+                      className={`join-item btn btn-sm ${mode === "view" ? "btn-primary" : "btn-ghost"}`}
+                      onClick={() => setMode("view")}
+                    >
+                      Affichage
+                    </button>
+                    <button
+                      className={`join-item btn btn-sm ${mode === "edit" ? "btn-primary" : "btn-ghost"}`}
+                      onClick={() => setMode("edit")}
+                    >
+                      Édition
+                    </button>
+                  </div>
+
+                  <button
+                    className="btn btn-ghost btn-sm gap-2"
+                    onClick={() => setShowJsonModal(true)}
+                    title="Ouvrir les outils JSON"
+                  >
+                    <span aria-hidden="true">⚙️</span>
+                    JSON
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {projects.map((project) => {
+                  const isActive = project.code === activeProjectCode;
+                  const isEditing = editingProjectCode === project.code;
+
+                  return (
+                    <div key={project.code} className="join max-w-full">
+                      {isEditing ? (
+                        <>
+                          <input
+                            type="text"
+                            className="join-item input input-bordered input-sm w-40"
+                            value={editingProjectName}
+                            onChange={(e) => setEditingProjectName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleConfirmRenameProject(project);
+                              if (e.key === "Escape") handleCancelRenameProject();
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            className="join-item btn btn-sm btn-primary"
+                            onClick={() => handleConfirmRenameProject(project)}
+                            title="Valider le renommage"
+                          >
+                            ✓
+                          </button>
+                          <button
+                            className="join-item btn btn-sm btn-ghost"
+                            onClick={handleCancelRenameProject}
+                            title="Annuler le renommage"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            className={`join-item btn btn-sm ${isActive ? "btn-primary" : "btn-outline"}`}
+                            onClick={() => setActiveProjectCode(project.code)}
+                            title={project.name}
+                          >
+                            <span>{project.name}</span>
+                          </button>
+                          {mode === "edit" && (
+                            <button
+                              className="join-item btn btn-sm btn-outline"
+                              onClick={() => handleStartRenameProject(project)}
+                              title={`Renommer ${project.name}`}
+                            >
+                              ✏️
+                            </button>
+                          )}
+                          {mode === "edit" && (
+                            <button
+                              className="join-item btn btn-sm btn-outline btn-error"
+                              onClick={() => handleDeleteProject(project)}
+                              title={`Supprimer ${project.name}`}
+                            >
+                              🗑
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="compact-card rounded-3xl bg-base-100 p-2.5 md:p-3.5 shadow-xl border border-base-200">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg md:text-xl font-semibold">
+                  {mode === "edit" ? "Arborescence en édition" : "Arborescence d'exécution"}
+                </h2>
+                <p className="text-xs md:text-sm text-base-content/70 mt-0.5">
+                  {mode === "edit"
+                    ? "Ajoute des siblings, des children, renomme, supprime, duplique et réorganise la structure à la main."
+                    : "Coche les cases pendant tes tests. Cocher un parent propage la valeur à tous ses enfants."}
+                </p>
+              </div>
+              {mode === "edit" && (
+                <button className="btn btn-primary btn-sm" onClick={addRoot}>
+                  + Racine
+                </button>
+              )}
+            </div>
+
+            <div className="compact-stack space-y-1.5">
+              {filteredTree.length === 0 ? (
+                <div className="alert py-2">
+                  <span>Aucun élément à afficher.</span>
+                </div>
+              ) : (
+                filteredTree.map((node) => (
+                  <TreeNode
+                    key={node.id}
+                    node={node}
+                    allNodes={tree}
+                    mode={mode}
+                    depth={0}
+                    onUpdateTree={setTree}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {showJsonModal && (
+        <div className="modal modal-open">
+          <div className="modal-box w-[calc(100vw-1rem)] max-w-5xl p-0 overflow-hidden json-modal-box">
+            <div className="flex items-center justify-between border-b border-base-200 px-4 py-3 md:px-5 md:py-4 shrink-0">
+              <div>
+                <h3 className="text-lg font-semibold">JSON et synchronisation</h3>
+                <p className="text-sm text-base-content/70 mt-1">
+                  Projet actif, export Markdown, import/export global et synchro Google Drive.
+                </p>
+              </div>
+              <button className="btn btn-sm btn-circle btn-ghost" onClick={() => setShowJsonModal(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 md:p-5 space-y-4 json-modal-content">
+              <div className="join flex-wrap">
+                <button
+                  className={`join-item btn btn-sm ${jsonTab === "current" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setJsonTab("current")}
+                >
+                  Projet actif
+                </button>
+                <button
+                  className={`join-item btn btn-sm ${jsonTab === "all" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setJsonTab("all")}
+                >
+                  Tous les projets
+                </button>
+                <button
+                  className={`join-item btn btn-sm ${jsonTab === "drive" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setJsonTab("drive")}
+                >
+                  Google Drive
+                </button>
+              </div>
+
+              {jsonTab === "current" && (
+                <>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      className="btn btn-outline"
+                      onClick={() => setMarkdownDraft(exportTreeToMarkdown(activeProject.name, tree))}
+                    >
+                      Format Markdown
+                    </button>
+                  </div>
+
+                  <textarea
+                    className="textarea textarea-bordered w-full h-[50vh] md:h-[420px] code-json text-xs leading-5"
+                    value={jsonDraft}
+                    onChange={(e) => setJsonDraft(e.target.value)}
+                    spellCheck={false}
+                  />
+
+                  <div className="flex flex-wrap gap-3 pb-1">
+                    <button className="btn btn-primary" onClick={importJson}>
+                      Importer ce JSON
+                    </button>
+                    <button className="btn btn-outline" onClick={() => setJsonDraft(exportJson(tree))}>
+                      Recharger depuis l'état actuel
+                    </button>
+                    <button className="btn btn-outline" onClick={downloadJson}>
+                      Télécharger le JSON
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Markdown</div>
+                    <textarea
+                      className="textarea textarea-bordered w-full h-[40vh] md:h-[320px] code-json text-xs leading-5"
+                      value={markdownDraft}
+                      onChange={(e) => setMarkdownDraft(e.target.value)}
+                      spellCheck={false}
+                    />
+                  </div>
+                </>
+              )}
+
+              {jsonTab === "all" && (
+                <>
+                  <div className="text-sm text-base-content/70">
+                    Import global : les projets du même code sont écrasés, les autres sont ajoutés.
+                  </div>
+                  <textarea
+                    className="textarea textarea-bordered w-full h-[50vh] md:h-[420px] code-json text-xs leading-5"
+                    value={allProjectsDraft}
+                    onChange={(e) => setAllProjectsDraft(e.target.value)}
+                    spellCheck={false}
+                  />
+
+                  <div className="flex flex-wrap gap-3 pb-1">
+                    <button className="btn btn-primary" onClick={importAllProjects}>
+                      Importer tous les projets
+                    </button>
+                    <button className="btn btn-outline" onClick={() => setAllProjectsDraft(exportAllProjects(projects))}>
+                      Recharger l'export global
+                    </button>
+                    <button className="btn btn-outline" onClick={downloadAllProjectsJson}>
+                      Télécharger tout
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {jsonTab === "drive" && (
+                <div className="space-y-4 pb-1">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+                    <label className="form-control">
+                      <div className="label py-1">
+                        <span className="label-text text-sm font-medium">Google OAuth Client ID</span>
+                      </div>
+                      <input
+                        type="text"
+                        className="input input-bordered"
+                        placeholder="1234567890-xxxxx.apps.googleusercontent.com"
+                        value={driveClientId}
+                        onChange={(e) => setDriveClientId(e.target.value)}
+                      />
+                    </label>
+
+                    <div className="flex flex-wrap items-end gap-2">
+                      <button className="btn btn-primary" onClick={handleConnectDrive} disabled={driveBusy}>
+                        {driveBusy ? "..." : "Connecter Drive"}
+                      </button>
+                      <button
+                        className="btn btn-outline"
+                        onClick={handleCheckDriveSync}
+                        disabled={driveBusy || !driveAccessToken}
+                      >
+                        Vérifier la synchro
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-base-200 bg-base-50 p-4 space-y-2 text-sm">
+                    <div>
+                      <span className="font-semibold">État :</span> {driveStatus}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Fichier Drive :</span> {DRIVE_FILE_NAME}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Message :</span> {driveMessage || "-"}
+                    </div>
+                  </div>
+
+                  {driveSyncInfo && (
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-base-200 p-4 space-y-2">
+                        <div className="font-semibold">Version locale</div>
+                        <div className="text-sm">Exportée le : {formatDateTime(driveSyncInfo.localExportedAt)}</div>
+                        <div className="text-sm">Nombre de projets : {driveSyncInfo.localProjectCount}</div>
+                      </div>
+
+                      <div className="rounded-2xl border border-base-200 p-4 space-y-2">
+                        <div className="font-semibold">Version Drive</div>
+                        <div className="text-sm">
+                          Exportée le : {driveSyncInfo.driveMissing ? "Aucun fichier" : formatDateTime(driveSyncInfo.driveExportedAt)}
+                        </div>
+                        <div className="text-sm">
+                          Modifiée le : {driveSyncInfo.driveMissing ? "-" : formatDateTime(driveSyncInfo.driveModifiedTime)}
+                        </div>
+                        <div className="text-sm">Nombre de projets : {driveSyncInfo.driveProjectCount}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleImportFromDrive}
+                      disabled={driveBusy || !driveAccessToken || !driveSyncInfo || driveSyncInfo.driveMissing}
+                    >
+                      Importer depuis Drive
+                    </button>
+                    <button
+                      className="btn btn-outline"
+                      onClick={handleUploadToDrive}
+                      disabled={driveBusy || !driveAccessToken}
+                    >
+                      Uploader vers Drive
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setShowJsonModal(false)}></div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function TreeNode({ node, allNodes, mode, depth, isLastChild = false, onUpdateTree }) {
+  const hasChildren = node.children.length > 0;
+  const canMoveUp = canMoveNode(allNodes, node.id, "up") === true;
+  const canMoveDown = canMoveNode(allNodes, node.id, "down") === true;
+
+  function updateCurrent(updater) {
+    onUpdateTree((prev) => updateNodeById(prev, node.id, updater));
+  }
+
+  function handleRename(label) {
+    updateCurrent((current) => ({ ...current, label }));
+  }
+
+  function handleToggleExpand() {
+    updateCurrent((current) => ({ ...current, expanded: !current.expanded }));
+  }
+
+  function handleAddChild() {
+    onUpdateTree((prev) => addChildById(prev, node.id, createNode("Nouvel enfant")));
+  }
+
+  function handleAddSibling() {
+    onUpdateTree((prev) => insertSiblingById(prev, node.id, createNode("Nouveau sibling")));
+  }
+
+  function handleDuplicate() {
+    onUpdateTree((prev) => duplicateNodeAsSiblingById(prev, node.id));
+  }
+
+  function handleDelete() {
+    if (!window.confirm(`Supprimer "${node.label || "cet item"}" et ses enfants ?`)) return;
+    onUpdateTree((prev) => removeNodeById(prev, node.id));
+  }
+
+  function handleCheck(checked) {
+    onUpdateTree((prev) => toggleCheckedById(prev, node.id, checked));
+  }
+
+  function handleMove(direction) {
+    onUpdateTree((prev) => moveNodeById(prev, node.id, direction));
+  }
+
+  return (
+    <div className={`tree-node-wrap ${depth > 0 ? "tree-child-row" : ""} ${depth > 0 && isLastChild ? "last-child" : ""}`}>
+      <div
+        className={`compact-node rounded-lg border border-base-200 bg-base-100 hover:border-base-300 transition-colors node-depth-shadow-${Math.min(depth, 5)}`}
+        style={{ marginLeft: depth === 0 ? 0 : depth * 4 }}
+      >
+        <div className="node-row-hover flex items-start gap-1.5 p-1.5 rounded-lg">
+          <button
+            className={`btn btn-xs btn-ghost mt-[1px] ${hasChildren ? "visible" : "invisible"}`}
+            onClick={handleToggleExpand}
+            title={node.expanded ? "Replier" : "Déplier"}
+          >
+            {node.expanded ? "−" : "+"}
+          </button>
+
+          {mode === "view" ? (
+            <input
+              type="checkbox"
+              className="checkbox checkbox-primary mt-[3px]"
+              checked={node.checked}
+              onChange={(e) => handleCheck(e.target.checked)}
+            />
+          ) : (
+            <div className="badge badge-outline mt-[2px]">{depth}</div>
+          )}
+
+          <div className="min-w-0 flex-1">
+            {mode === "edit" ? (
+              <div className="flex flex-col gap-1 md:flex-row md:items-center md:gap-2">
+                <input
+                  type="text"
+                  className="input input-bordered input-sm min-w-0 flex-1 text-sm"
+                  value={node.label}
+                  onChange={(e) => handleRename(e.target.value)}
+                  placeholder="Libellé"
+                />
+
+                <div className="node-actions-reveal flex shrink-0 flex-wrap items-center gap-1 md:justify-end">
+                  <button className="btn btn-xs btn-outline btn-primary" onClick={handleAddChild}>
+                    + Child
+                  </button>
+                  <button className="btn btn-xs btn-outline" onClick={handleAddSibling}>
+                    + Sibling
+                  </button>
+                  <button className="btn btn-xs btn-outline" onClick={handleDuplicate}>
+                    Dupliquer
+                  </button>
+                  <button className="btn btn-xs btn-outline btn-error" onClick={handleDelete}>
+                    Supprimer
+                  </button>
+                  <button className="btn btn-xs btn-ghost" onClick={handleToggleExpand}>
+                    {node.expanded ? "Replier" : "Déplier"}
+                  </button>
+                  <button
+                    className="btn btn-xs btn-ghost"
+                    onClick={() => handleMove("up")}
+                    disabled={!canMoveUp}
+                    title="Monter parmi les siblings"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    className="btn btn-xs btn-ghost"
+                    onClick={() => handleMove("down")}
+                    disabled={!canMoveDown}
+                    title="Descendre parmi les siblings"
+                  >
+                    ↓
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1 pt-[1px]">
+                <span className={`font-medium text-sm leading-4 ${node.checked ? "line-through text-base-content/50" : ""}`}>
+                  {node.label || <span className="italic text-base-content/40">Sans titre</span>}
+                </span>
+                {hasChildren && <span className="badge badge-neutral badge-sm">{node.children.length}</span>}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {node.expanded && hasChildren && (
+        <div className="tree-children compact-stack space-y-1.5">
+          {node.children.map((child, childIndex) => (
+            <TreeNode
+              key={child.id}
+              node={child}
+              allNodes={allNodes}
+              mode={mode}
+              depth={depth + 1}
+              isLastChild={childIndex === node.children.length - 1}
+              onUpdateTree={onUpdateTree}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
