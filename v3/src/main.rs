@@ -827,15 +827,35 @@ async fn drive_find_file(token: &str) -> Result<Option<String>, String> {
         "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='{}' and trashed=false&fields=files(id,name,modifiedTime,size)",
         DRIVE_FILE_NAME
     );
-    let text = Request::get(&url)
+    console_log(&format!("[Drive] find_file:start url={} token={}", url, token_preview(token)));
+    let response = Request::get(&url)
         .header("Authorization", &format!("Bearer {token}"))
         .send()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| {
+            let msg = format!("[Drive] find_file:network_error {}", e);
+            console_error(&msg);
+            e.to_string()
+        })?;
+    let status = response.status();
+    let ok = response.ok();
+    let text = response
         .text()
         .await
-        .map_err(|e| e.to_string())?;
-    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = format!("[Drive] find_file:read_body_error {}", e);
+            console_error(&msg);
+            e.to_string()
+        })?;
+    console_log(&format!("[Drive] find_file:response status={} ok={} body={}", status, ok, text));
+    if !ok {
+        return Err(format!("HTTP {} — {}", status, text));
+    }
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        let msg = format!("[Drive] find_file:json_error {} body={}", e, text);
+        console_error(&msg);
+        e.to_string()
+    })?;
     Ok(value["files"]
         .as_array()
         .and_then(|files| files.first())
@@ -844,20 +864,33 @@ async fn drive_find_file(token: &str) -> Result<Option<String>, String> {
 }
 
 async fn drive_download_file(token: &str, file_id: &str) -> Result<String, String> {
-    Request::get(&format!(
-        "https://www.googleapis.com/drive/v3/files/{}?alt=media",
-        file_id
-    ))
-    .header("Authorization", &format!("Bearer {token}"))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?
-    .text()
-    .await
-    .map_err(|e| e.to_string())
+    let url = format!("https://www.googleapis.com/drive/v3/files/{}?alt=media", file_id);
+    console_log(&format!("[Drive] download:start file_id={} token={}", file_id, token_preview(token)));
+    let response = Request::get(&url)
+        .header("Authorization", &format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = format!("[Drive] download:network_error {}", e);
+            console_error(&msg);
+            e.to_string()
+        })?;
+    let status = response.status();
+    let ok = response.ok();
+    let text = response.text().await.map_err(|e| {
+        let msg = format!("[Drive] download:read_body_error {}", e);
+        console_error(&msg);
+        e.to_string()
+    })?;
+    console_log(&format!("[Drive] download:response status={} ok={} body_preview={}", status, ok, text.chars().take(300).collect::<String>()));
+    if !ok {
+        return Err(format!("HTTP {} — {}", status, text));
+    }
+    Ok(text)
 }
 
 async fn request_google_drive_token(client_id: &str) -> Result<String, String> {
+    console_log(&format!("[Drive OAuth] rust:start client_id={} scope={}", client_id, DRIVE_SCOPE));
     let window = web_sys::window().ok_or_else(|| "window unavailable".to_string())?;
     let func = js_sys::Reflect::get(&window, &JsValue::from_str("requestGoogleDriveToken"))
         .map_err(|_| "Fonction requestGoogleDriveToken introuvable".to_string())?
@@ -870,10 +903,16 @@ async fn request_google_drive_token(client_id: &str) -> Result<String, String> {
         .map_err(|_| "OAuth n'a pas renvoyé de Promise".to_string())?;
     let token = JsFuture::from(promise)
         .await
-        .map_err(|e| format!("Erreur Google Identity Services: {:?}", e))?;
-    token
+        .map_err(|e| {
+            let msg = format!("[Drive OAuth] rust:error {:?}", e);
+            console_error(&msg);
+            format!("Erreur Google Identity Services: {:?}", e)
+        })?;
+    let token = token
         .as_string()
-        .ok_or_else(|| "Token Google invalide".to_string())
+        .ok_or_else(|| "Token Google invalide".to_string())?;
+    console_log(&format!("[Drive OAuth] rust:success token={}", token_preview(&token)));
+    Ok(token)
 }
 
 async fn drive_upload_file(token: &str, payload: &str, existing_file_id: Option<String>) -> Result<(), String> {
@@ -932,6 +971,10 @@ async fn drive_upload_file(token: &str, payload: &str, existing_file_id: Option<
         .dyn_into::<web_sys::Response>()
         .map_err(|_| "Réponse fetch invalide".to_string())?;
 
+    let status = response.status();
+    let ok = response.ok();
+    console_log(&format!("[Drive] upload:response status={} ok={}", status, ok));
+
     if response.ok() {
         Ok(())
     } else {
@@ -940,8 +983,22 @@ async fn drive_upload_file(token: &str, payload: &str, existing_file_id: Option<
             .ok()
             .and_then(|value| value.as_string())
             .unwrap_or_else(|| "Erreur Drive inconnue".into());
-        Err(text)
+        console_error(&format!("[Drive] upload:error status={} body={}", status, text));
+        Err(format!("HTTP {} — {}", status, text))
     }
+}
+
+fn console_log(message: &str) {
+    web_sys::console::log_1(&JsValue::from_str(message));
+}
+
+fn console_error(message: &str) {
+    web_sys::console::error_1(&JsValue::from_str(message));
+}
+
+fn token_preview(token: &str) -> String {
+    let prefix: String = token.chars().take(12).collect();
+    format!("{}... (len={})", prefix, token.len())
 }
 
 fn status_badge_class(status: &TaskStatus) -> &'static str {
@@ -1532,31 +1589,36 @@ fn App() -> impl IntoView {
 
     let on_connect_drive = move |_| {
         let client_id = drive_client_id.get_untracked();
+        console_log(&format!("[UI] connect_drive:click client_id={}", client_id));
         if client_id.trim().is_empty() {
             status_message.set("Client ID Google manquant".into());
+            console_error("[UI] connect_drive:missing_client_id");
             return;
         }
+        status_message.set("Connexion Google Drive en cours...".into());
         let status_signal = status_message;
         let state_signal = state;
         spawn_local(async move {
             match request_google_drive_token(&client_id).await {
                 Ok(token) => {
+                    console_log(&format!("[UI] connect_drive:success token={}", token_preview(&token)));
                     drive_token_input.set(token.clone());
                     state_signal.update(|app| {
                         app.drive.client_id = client_id.clone();
                         app.drive.access_token = token.clone();
                         app.drive.status = "Connecté".into();
-                        app.drive.message = "Connexion Google Drive OK".into();
+                        app.drive.message = format!("Connexion Google Drive OK • token {}", token_preview(&token));
                     });
                     status_signal.set("Connexion Google Drive OK".into());
                 }
                 Err(err) => {
+                    console_error(&format!("[UI] connect_drive:error {}", err));
                     state_signal.update(|app| {
                         app.drive.client_id = client_id.clone();
                         app.drive.status = "Erreur".into();
                         app.drive.message = err.clone();
                     });
-                    status_signal.set("Connexion Google Drive impossible".into());
+                    status_signal.set(format!("Connexion Google Drive impossible: {}", err));
                 }
             }
         });
@@ -1564,19 +1626,25 @@ fn App() -> impl IntoView {
 
     let on_check_drive = move |_| {
         let token = drive_token_input.get_untracked();
+        console_log(&format!("[UI] check_drive:click token={}", token_preview(&token)));
         if token.trim().is_empty() {
             status_message.set("Token Google Drive manquant".into());
+            console_error("[UI] check_drive:missing_token");
             return;
         }
+        status_message.set("Vérification Google Drive en cours...".into());
         state.update(|app| {
             app.drive.client_id = drive_client_id.get_untracked();
             app.drive.access_token = token.clone();
+            app.drive.status = "Vérification...".into();
+            app.drive.message = format!("Test avec token {}", token_preview(&token));
         });
         let status_signal = status_message;
         let state_signal = state;
         spawn_local(async move {
             match drive_find_file(&token).await {
                 Ok(Some(file_id)) => {
+                    console_log(&format!("[UI] check_drive:found file_id={}", file_id));
                     state_signal.update(|app| {
                         app.drive.status = "Connecté".into();
                         app.drive.message = format!("Fichier Drive trouvé: {}", file_id);
@@ -1584,13 +1652,15 @@ fn App() -> impl IntoView {
                     status_signal.set("Google Drive joignable".into());
                 }
                 Ok(None) => {
+                    console_log("[UI] check_drive:no_file_found");
                     state_signal.update(|app| {
                         app.drive.status = "Connecté".into();
-                        app.drive.message = "Aucun fichier de synchro trouvé".into();
+                        app.drive.message = "Aucun fichier de synchro trouvé dans appDataFolder".into();
                     });
                     status_signal.set("Google Drive joignable, fichier absent".into());
                 }
                 Err(err) => {
+                    console_error(&format!("[UI] check_drive:error {}", err));
                     state_signal.update(|app| {
                         app.drive.status = "Erreur".into();
                         app.drive.message = err.clone();
@@ -1603,74 +1673,106 @@ fn App() -> impl IntoView {
 
     let on_import_drive = move |_| {
         let token = drive_token_input.get_untracked();
+        console_log(&format!("[UI] import_drive:click token={}", token_preview(&token)));
         if token.trim().is_empty() {
             status_message.set("Token Google Drive manquant".into());
+            console_error("[UI] import_drive:missing_token");
             return;
         }
+        status_message.set("Import Google Drive en cours...".into());
         let state_signal = state;
         let status_signal = status_message;
         spawn_local(async move {
             match drive_find_file(&token).await {
-                Ok(Some(file_id)) => match drive_download_file(&token, &file_id).await {
-                    Ok(raw) => match parse_all_projects_json(&raw) {
-                        Ok(imported) => {
-                            state_signal.update(|app| {
-                                for mut project in imported {
-                                    for node in &mut project.tree {
-                                        normalize_node(node);
+                Ok(Some(file_id)) => {
+                    console_log(&format!("[UI] import_drive:file_found file_id={}", file_id));
+                    match drive_download_file(&token, &file_id).await {
+                        Ok(raw) => match parse_all_projects_json(&raw) {
+                            Ok(imported) => {
+                                console_log(&format!("[UI] import_drive:parsed projects={}", imported.len()));
+                                state_signal.update(|app| {
+                                    for mut project in imported {
+                                        for node in &mut project.tree {
+                                            normalize_node(node);
+                                        }
+                                        if !app.projects.iter().any(|p| p.code == project.code) {
+                                            app.projects.push(ProjectMeta {
+                                                name: project.name.clone(),
+                                                code: project.code.clone(),
+                                            });
+                                        } else if let Some(meta) = app.projects.iter_mut().find(|p| p.code == project.code) {
+                                            meta.name = project.name.clone();
+                                        }
+                                        if let Some(tree) = app.trees.iter_mut().find(|tree| tree.code == project.code) {
+                                            tree.tree = project.tree.clone();
+                                        } else {
+                                            app.trees.push(ProjectTree {
+                                                code: project.code.clone(),
+                                                tree: project.tree.clone(),
+                                            });
+                                        }
                                     }
-                                    if !app.projects.iter().any(|p| p.code == project.code) {
-                                        app.projects.push(ProjectMeta {
-                                            name: project.name.clone(),
-                                            code: project.code.clone(),
-                                        });
-                                    } else if let Some(meta) = app.projects.iter_mut().find(|p| p.code == project.code) {
-                                        meta.name = project.name.clone();
-                                    }
-                                    if let Some(tree) = app.trees.iter_mut().find(|tree| tree.code == project.code) {
-                                        tree.tree = project.tree.clone();
-                                    } else {
-                                        app.trees.push(ProjectTree {
-                                            code: project.code.clone(),
-                                            tree: project.tree.clone(),
-                                        });
-                                    }
-                                }
-                            });
-                            status_signal.set("Import Drive effectué".into());
+                                });
+                                status_signal.set("Import Drive effectué".into());
+                            }
+                            Err(err) => {
+                                console_error(&format!("[UI] import_drive:json_error {}", err));
+                                status_signal.set(format!("JSON Drive invalide: {}", err))
+                            }
+                        },
+                        Err(err) => {
+                            console_error(&format!("[UI] import_drive:download_error {}", err));
+                            status_signal.set(format!("Téléchargement Drive impossible: {}", err))
                         }
-                        Err(err) => status_signal.set(format!("JSON Drive invalide: {}", err)),
-                    },
-                    Err(err) => status_signal.set(format!("Téléchargement Drive impossible: {}", err)),
-                },
-                Ok(None) => status_signal.set("Aucun fichier Drive à importer".into()),
-                Err(err) => status_signal.set(format!("Échec Google Drive: {}", err)),
+                    }
+                }
+                Ok(None) => {
+                    console_log("[UI] import_drive:no_file_found");
+                    status_signal.set("Aucun fichier Drive à importer".into())
+                }
+                Err(err) => {
+                    console_error(&format!("[UI] import_drive:error {}", err));
+                    status_signal.set(format!("Échec Google Drive: {}", err))
+                }
             }
         });
     };
 
     let on_upload_drive = move |_| {
         let token = drive_token_input.get_untracked();
+        console_log(&format!("[UI] upload_drive:click token={}", token_preview(&token)));
         if token.trim().is_empty() {
             status_message.set("Token Google Drive manquant".into());
+            console_error("[UI] upload_drive:missing_token");
             return;
         }
+        status_message.set("Upload Google Drive en cours...".into());
         let payload = export_all_projects(&normalize_state(state.get_untracked()));
         let state_signal = state;
         let status_signal = status_message;
         spawn_local(async move {
             match drive_find_file(&token).await {
-                Ok(existing_file_id) => match drive_upload_file(&token, &payload, existing_file_id).await {
-                    Ok(()) => {
-                        state_signal.update(|app| {
-                            app.drive.status = "Connecté".into();
-                            app.drive.message = "Upload Drive effectué".into();
-                        });
-                        status_signal.set("Upload Drive effectué".into());
+                Ok(existing_file_id) => {
+                    console_log(&format!("[UI] upload_drive:target existing_file_id={:?} payload_len={}", existing_file_id, payload.len()));
+                    match drive_upload_file(&token, &payload, existing_file_id).await {
+                        Ok(()) => {
+                            console_log("[UI] upload_drive:success");
+                            state_signal.update(|app| {
+                                app.drive.status = "Connecté".into();
+                                app.drive.message = "Upload Drive effectué".into();
+                            });
+                            status_signal.set("Upload Drive effectué".into());
+                        }
+                        Err(err) => {
+                            console_error(&format!("[UI] upload_drive:error {}", err));
+                            status_signal.set(format!("Upload Drive impossible: {}", err))
+                        }
                     }
-                    Err(err) => status_signal.set(format!("Upload Drive impossible: {}", err)),
-                },
-                Err(err) => status_signal.set(format!("Échec Google Drive: {}", err)),
+                }
+                Err(err) => {
+                    console_error(&format!("[UI] upload_drive:find_error {}", err));
+                    status_signal.set(format!("Échec Google Drive: {}", err))
+                }
             }
         });
     };

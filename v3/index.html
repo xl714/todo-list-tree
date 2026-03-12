@@ -15,7 +15,14 @@
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script>
       window.requestGoogleDriveToken = async function (clientId, scope) {
+        console.log("[Drive OAuth] requestGoogleDriveToken:start", {
+          clientId,
+          scope,
+          origin: window.location.origin,
+          href: window.location.href,
+        });
         if (!window.google?.accounts?.oauth2) {
+          console.error("[Drive OAuth] GIS non chargé");
           throw new Error("Google Identity Services n'est pas chargé");
         }
         return await new Promise((resolve, reject) => {
@@ -23,13 +30,26 @@
             client_id: clientId,
             scope,
             callback: (response) => {
-              if (response?.access_token) resolve(response.access_token);
-              else reject(new Error(response?.error || "Accès refusé"));
+              console.log("[Drive OAuth] callback", response);
+              if (response?.access_token) {
+                console.log("[Drive OAuth] access_token reçu", {
+                  tokenPreview: `${response.access_token.slice(0, 12)}...`,
+                  expiresIn: response.expires_in,
+                  scope: response.scope,
+                  tokenType: response.token_type,
+                });
+                resolve(response.access_token);
+              } else {
+                console.error("[Drive OAuth] callback sans token", response);
+                reject(new Error(response?.error || "Accès refusé"));
+              }
             },
             error_callback: (error) => {
+              console.error("[Drive OAuth] error_callback", error);
               reject(new Error(error?.message || "Erreur Google Identity Services"));
             },
           });
+          console.log("[Drive OAuth] requestAccessToken:consent");
           client.requestAccessToken({ prompt: "consent" });
         });
       };

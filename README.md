@@ -29,18 +29,27 @@ Pour éteindre ou après un changement de conf docker:
 docker compose down
 ```
 
-## use
+## Use
 
 ```bash
 cd v3
-# trunk serve --address 0.0.0.0 --port 8080
-ts
+ts # trunk serve --address 0.0.0.0 --port 8080
 ```
 
-## Build
+## Build and push to GitHub Pages
 
 ```bash
-trunk build --release
+docker exec openclaw-sandbox bash -c "cd /app/project/v3 && trunk build --release --public-url /todo-list-tree/v3/dist/"
+# or 
+docker exec -it openclaw-sandbox bash
+cd v3
+trunk build --release --public-url /todo-list-tree/v3/dist/
+
+# puis sur l'host
+git add -f v3/dist/
+git commit -m "feat: build release v3 pour GitHub Pages"
+git push
+# https://xl714.github.io/todo-list-tree/v3/dist/
 ```
 
 Note: Cela va créer un dossier nommé dist/ à la racine de ton projet v3.
