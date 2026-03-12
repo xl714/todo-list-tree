@@ -40,6 +40,7 @@ ts # trunk serve --address 0.0.0.0 --port 8080
 
 ```bash
 docker exec openclaw-sandbox bash -c "cd /app/project/v3 && trunk build --release --public-url /todo-list-tree/v3/dist/"
+docker exec openclaw-sandbox bash -c "cd /app/project/v3 && trunk build --release --public-url ."
 # or 
 docker exec -it openclaw-sandbox bash
 cd v3

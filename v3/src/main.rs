@@ -1454,7 +1454,7 @@ fn App() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(window) = web_sys::window() {
             let sw = window.navigator().service_worker();
-            let _ = sw.register("/sw.js");
+            let _ = sw.register("sw.js");
         }
     });
 
