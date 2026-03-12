@@ -1,0 +1,25 @@
+services:
+  openclaw-agent:
+    build: .
+    container_name: openclaw-sandbox
+    env_file:
+      - .env
+    volumes:
+      # --- DOSSIERS PROTÉGÉS (Lecture seule / :ro) ---
+      - ./.git:/app/project/.git:ro
+      - ./v1:/app/project/v1:ro
+      
+      # --- FICHIERS DE CONFIGURATION PROTÉGÉS (:ro) ---
+      - ./.gitignore:/app/project/.gitignore:ro
+      - ./Dockerfile:/app/project/Dockerfile:ro
+      - ./docker-compose.yml:/app/project/docker-compose.yml:ro
+      
+      # --- ZONE DE TRAVAIL (Lecture & Écriture) ---
+      - ./v2:/app/project/v2
+      - ./v3:/app/project/v3
+      
+    environment:
+      - OPENCLAW_OPENAI_API_KEY=${OPENCLAW_OPENAI_API_KEY}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
