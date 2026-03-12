@@ -1,1 +1,16 @@
 .env
+
+
+# Rust / Cargo
+**/target/
+
+# Trunk / WebAssembly build output
+**/dist/
+
+# Environnement OpenClaw (si présent dans le dossier)
+.openclaw/
+workspace/
+
+# OS spécifiques
+.DS_Store
+Thumbs.db

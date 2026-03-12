@@ -19,7 +19,7 @@ services:
       - ./v3:/app/project/v3
       
     environment:
-      - OPENCLAW_OPENAI_API_KEY=${OPENCLAW_OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     stdin_open: true
     tty: true
     restart: unless-stopped
