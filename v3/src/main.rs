@@ -16,12 +16,48 @@ fn default_expanded() -> bool {
     true
 }
 
-fn default_status() -> String {
-    "TODO".into()
+fn default_show_details() -> bool {
+    true
 }
 
-fn default_status_options() -> Vec<String> {
-    vec!["TODO".into(), "DONE".into(), "IDEA".into(), "BLOCKED".into()]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+enum TaskStatus {
+    #[serde(rename = "TODO", alias = "Todo")]
+    Todo,
+    #[serde(rename = "DONE", alias = "Done")]
+    Done,
+    #[serde(rename = "IDEA", alias = "Idea")]
+    Idea,
+    #[serde(rename = "BLOCKED", alias = "Blocked")]
+    Blocked,
+}
+
+impl TaskStatus {
+    fn as_label(&self) -> &'static str {
+        match self {
+            Self::Todo => "TODO",
+            Self::Done => "DONE",
+            Self::Idea => "IDEA",
+            Self::Blocked => "BLOCKED",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value.trim().to_uppercase().as_str() {
+            "DONE" => Self::Done,
+            "IDEA" => Self::Idea,
+            "BLOCKED" => Self::Blocked,
+            _ => Self::Todo,
+        }
+    }
+}
+
+fn default_status() -> TaskStatus {
+    TaskStatus::Todo
+}
+
+fn default_status_options() -> Vec<TaskStatus> {
+    vec![TaskStatus::Todo, TaskStatus::Done, TaskStatus::Idea, TaskStatus::Blocked]
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -32,10 +68,12 @@ struct TodoNode {
     checked: bool,
     #[serde(default = "default_expanded")]
     expanded: bool,
-    #[serde(default = "default_status")]
-    status: String,
-    #[serde(default)]
-    tags: String,
+    #[serde(default = "default_show_details")]
+    show_details: bool,
+    #[serde(default = "default_status", deserialize_with = "deserialize_status")]
+    status: TaskStatus,
+    #[serde(default, deserialize_with = "deserialize_tags")]
+    tags: Vec<String>,
     #[serde(default)]
     description: String,
     #[serde(default)]
@@ -79,7 +117,7 @@ struct AppState {
     #[serde(default)]
     drive: DriveConfig,
     #[serde(default = "default_status_options")]
-    available_statuses: Vec<String>,
+    available_statuses: Vec<TaskStatus>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,13 +189,8 @@ fn is_valid_project_name(name: &str) -> bool {
     name.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
-fn normalize_status_value(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        default_status()
-    } else {
-        trimmed.to_uppercase()
-    }
+fn normalize_status_value(value: &str) -> TaskStatus {
+    TaskStatus::from_str(value)
 }
 
 fn parse_tags(tags: &str) -> Vec<String> {
@@ -166,6 +199,36 @@ fn parse_tags(tags: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn tags_to_text(tags: &[String]) -> String {
+    tags.join(", ")
+}
+
+fn deserialize_status<'de, D>(deserializer: D) -> Result<TaskStatus, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(TaskStatus::from_str(&raw))
+}
+
+fn deserialize_tags<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TagsField {
+        Text(String),
+        List(Vec<String>),
+    }
+
+    let raw = TagsField::deserialize(deserializer)?;
+    Ok(match raw {
+        TagsField::Text(text) => parse_tags(&text),
+        TagsField::List(list) => parse_tags(&tags_to_text(&list)),
+    })
 }
 
 fn parse_links_text(raw: &str) -> Vec<String> {
@@ -187,8 +250,8 @@ fn node_matches_text(node: &TodoNode, term: &str) -> bool {
 
     let haystacks = [
         node.label.to_lowercase(),
-        node.status.to_lowercase(),
-        node.tags.to_lowercase(),
+        node.status.as_label().to_lowercase(),
+        tags_to_text(&node.tags).to_lowercase(),
         node.description.to_lowercase(),
         node.links.join(" ").to_lowercase(),
     ];
@@ -202,8 +265,9 @@ fn node_matches_tag(node: &TodoNode, tag_filter: &str) -> bool {
         return true;
     }
 
-    let node_tags = parse_tags(&node.tags)
-        .into_iter()
+    let node_tags = node
+        .tags
+        .iter()
         .map(|t| t.to_lowercase())
         .collect::<Vec<_>>();
 
@@ -217,8 +281,7 @@ fn normalize_node(node: &mut TodoNode) {
     if node.label.trim().is_empty() {
         node.label = String::new();
     }
-    node.status = normalize_status_value(&node.status);
-    node.tags = parse_tags(&node.tags).join(", ");
+    node.tags = parse_tags(&tags_to_text(&node.tags));
     node.links = node
         .links
         .iter()
@@ -241,9 +304,8 @@ fn normalize_state(mut state: AppState) -> AppState {
         state
             .available_statuses
             .iter()
-            .map(|s| normalize_status_value(s))
-            .filter(|s| !s.is_empty())
-            .fold(Vec::<String>::new(), |mut acc, status| {
+            .cloned()
+            .fold(Vec::<TaskStatus>::new(), |mut acc, status| {
                 if !acc.contains(&status) {
                     acc.push(status);
                 }
@@ -278,8 +340,9 @@ fn create_node(label: &str) -> TodoNode {
         label: label.into(),
         checked: false,
         expanded: true,
+        show_details: true,
         status: default_status(),
-        tags: String::new(),
+        tags: vec![],
         description: String::new(),
         links: vec![],
         children: vec![],
@@ -292,8 +355,9 @@ fn default_tree() -> Vec<TodoNode> {
         label: "Lorem".into(),
         checked: false,
         expanded: true,
-        status: "TODO".into(),
-        tags: "migration, ui".into(),
+        show_details: true,
+        status: TaskStatus::Todo,
+        tags: vec!["migration".into(), "ui".into()],
         description: "Exemple de tâche racine avec détails éditables.".into(),
         links: vec!["https://docs.openclaw.ai".into()],
         children: vec![TodoNode {
@@ -301,8 +365,9 @@ fn default_tree() -> Vec<TodoNode> {
             label: "Ipsum".into(),
             checked: false,
             expanded: true,
-            status: "IDEA".into(),
-            tags: "prototype".into(),
+            show_details: true,
+            status: TaskStatus::Idea,
+            tags: vec!["prototype".into()],
             description: String::new(),
             links: vec![],
             children: vec![],
@@ -316,6 +381,7 @@ fn clone_node_deep_with_new_ids(node: &TodoNode) -> TodoNode {
         label: node.label.clone(),
         checked: node.checked,
         expanded: node.expanded,
+        show_details: node.show_details,
         status: node.status.clone(),
         tags: node.tags.clone(),
         description: node.description.clone(),
@@ -329,10 +395,9 @@ fn markdown_checkbox(checked: bool) -> &'static str {
 }
 
 fn markdown_meta(node: &TodoNode) -> String {
-    let mut parts = vec![format!("({})", node.status)];
-    let tags = parse_tags(&node.tags);
-    if !tags.is_empty() {
-        parts.push(tags.into_iter().map(|tag| format!("#{}", tag)).collect::<Vec<_>>().join(" "));
+    let mut parts = vec![format!("({})", node.status.as_label())];
+    if !node.tags.is_empty() {
+        parts.push(node.tags.iter().map(|tag| format!("#{}", tag)).collect::<Vec<_>>().join(" "));
     }
     parts.join(" ")
 }
@@ -434,6 +499,32 @@ fn set_checked_deep(node: &mut TodoNode, checked: bool) {
     node.checked = checked;
     for child in &mut node.children {
         set_checked_deep(child, checked);
+    }
+}
+
+fn set_expanded_deep(node: &mut TodoNode, expanded: bool) {
+    node.expanded = expanded;
+    for child in &mut node.children {
+        set_expanded_deep(child, expanded);
+    }
+}
+
+fn set_all_expanded(nodes: &mut [TodoNode], expanded: bool) {
+    for node in nodes {
+        set_expanded_deep(node, expanded);
+    }
+}
+
+fn set_show_details_deep(node: &mut TodoNode, show_details: bool) {
+    node.show_details = show_details;
+    for child in &mut node.children {
+        set_show_details_deep(child, show_details);
+    }
+}
+
+fn set_all_show_details(nodes: &mut [TodoNode], show_details: bool) {
+    for node in nodes {
+        set_show_details_deep(node, show_details);
     }
 }
 
@@ -557,10 +648,20 @@ fn filter_nodes(nodes: &[TodoNode], text_filter: &str, tag_filter: &str) -> Vec<
         for node in nodes {
             let filtered_children = walk(&node.children, text_filter, tag_filter);
             let self_matches = node_matches_text(node, text_filter) && node_matches_tag(node, tag_filter);
-            if self_matches || !filtered_children.is_empty() {
+            let has_matching_children = !filtered_children.is_empty();
+
+            if self_matches || has_matching_children {
                 let mut cloned = node.clone();
-                cloned.expanded = true;
-                cloned.children = filtered_children;
+                cloned.expanded = if has_matching_children {
+                    true
+                } else {
+                    node.expanded
+                };
+                cloned.children = if cloned.expanded {
+                    filtered_children
+                } else {
+                    vec![]
+                };
                 out.push(cloned);
             }
         }
@@ -843,12 +944,12 @@ async fn drive_upload_file(token: &str, payload: &str, existing_file_id: Option<
     }
 }
 
-fn status_badge_class(status: &str) -> &'static str {
+fn status_badge_class(status: &TaskStatus) -> &'static str {
     match status {
-        "DONE" => "status-badge status-done",
-        "IDEA" => "status-badge status-idea",
-        "BLOCKED" => "status-badge status-blocked",
-        _ => "status-badge status-todo",
+        TaskStatus::Done => "status-badge status-done",
+        TaskStatus::Idea => "status-badge status-idea",
+        TaskStatus::Blocked => "status-badge status-blocked",
+        TaskStatus::Todo => "status-badge status-todo",
     }
 }
 
@@ -950,8 +1051,8 @@ fn render_project_chip(
 }
 
 fn render_status_editor(
-    current_status: String,
-    status_options: Vec<String>,
+    current_status: TaskStatus,
+    status_options: Vec<TaskStatus>,
     state: RwSignal<AppState>,
     node_id: String,
 ) -> AnyView {
@@ -971,9 +1072,10 @@ fn render_status_editor(
         }>
             {options.into_iter().map(|status| {
                 let selected = status == current_status;
-                let label = status.clone();
+                let value = status.as_label().to_string();
+                let label = value.clone();
                 view! {
-                    <option value=status.clone() selected=selected>{label}</option>
+                    <option value=value.clone() selected=selected>{label}</option>
                 }
             }).collect_view()}
         </select>
@@ -999,13 +1101,13 @@ fn render_link_list(links: &[String]) -> AnyView {
     }
 }
 
-fn render_tags(tags: &str) -> AnyView {
-    let tag_list = parse_tags(tags);
-    if tag_list.is_empty() {
+fn render_tags(tags: &[String]) -> AnyView {
+    if tags.is_empty() {
         view! { <></> }.into_any()
     } else {
-        let tags_view = tag_list
-            .into_iter()
+        let tags_view = tags
+            .iter()
+            .cloned()
             .map(|tag| view! { <span class="tag-badge">{tag}</span> })
             .collect_view();
         view! { <div class="row tags-row">{tags_view}</div> }.into_any()
@@ -1017,7 +1119,7 @@ fn render_node(
     state: RwSignal<AppState>,
     mode: String,
     depth: usize,
-    status_options: Vec<String>,
+    status_options: Vec<TaskStatus>,
 ) -> AnyView {
     let has_children = !node.children.is_empty();
     let links_text = links_to_text(&node.links);
@@ -1036,6 +1138,7 @@ fn render_node(
     let tags_id = node_id.clone();
     let description_id = node_id.clone();
     let links_id = node_id.clone();
+    let details_id = node_id.clone();
 
     let left_control = if mode == "view" {
         view! {
@@ -1071,8 +1174,10 @@ fn render_node(
         view! { <span class=class_name>{if node.label.is_empty() { "Sans titre".to_string() } else { node.label.clone() }}</span> }.into_any()
     };
 
-    let meta_view = if mode == "edit" {
-        let tag_value = node.tags.clone();
+    let meta_view = if !node.show_details {
+        view! { <></> }.into_any()
+    } else if mode == "edit" {
+        let tag_value = tags_to_text(&node.tags);
         let description_value = node.description.clone();
         let links_value = links_text.clone();
         view! {
@@ -1083,7 +1188,7 @@ fn render_node(
                         let value = event_target_value(&ev);
                         state.update(|app| {
                             with_active_tree_mut(app, |tree| {
-                                update_node_by_id(tree, &tags_id, &mut |node| node.tags = parse_tags(&value).join(", "));
+                                update_node_by_id(tree, &tags_id, &mut |node| node.tags = parse_tags(&value));
                             });
                         });
                     } />
@@ -1108,7 +1213,7 @@ fn render_node(
         }
         .into_any()
     } else {
-        let status_badge = view! { <span class=status_badge_class(&node.status)>{node.status.clone()}</span> };
+        let status_badge = view! { <span class=status_badge_class(&node.status)>{node.status.as_label().to_string()}</span> };
         let description_view = if node.description.trim().is_empty() {
             view! { <></> }.into_any()
         } else {
@@ -1207,6 +1312,15 @@ fn render_node(
                     </button>
                     {left_control}
                     {label_view}
+                    <button class="secondary tiny" title=if node.show_details { "Compacter" } else { "Décompacter" } on:click=move |_| {
+                        state.update(|app| {
+                            with_active_tree_mut(app, |tree| {
+                                update_node_by_id(tree, &details_id, &mut |node| node.show_details = !node.show_details);
+                            });
+                        });
+                    }>
+                        {if node.show_details { "👁" } else { "🙈" }}
+                    </button>
                     {actions}
                 </div>
                 {meta_view}
@@ -1230,7 +1344,6 @@ fn App() -> impl IntoView {
     let all_projects_json = RwSignal::new(String::new());
     let drive_client_id = RwSignal::new(String::new());
     let drive_token_input = RwSignal::new(String::new());
-    let new_status_input = RwSignal::new(String::new());
 
     Effect::new(move |_| {
         let state = state;
@@ -1291,6 +1404,30 @@ fn App() -> impl IntoView {
     let on_add_root = move |_| {
         state.update(|app| {
             with_active_tree_mut(app, |tree| tree.push(create_node("Nouvelle section")));
+        });
+    };
+
+    let on_expand_all = move |_| {
+        state.update(|app| {
+            with_active_tree_mut(app, |tree| set_all_expanded(tree, true));
+        });
+    };
+
+    let on_collapse_all = move |_| {
+        state.update(|app| {
+            with_active_tree_mut(app, |tree| set_all_expanded(tree, false));
+        });
+    };
+
+    let on_expand_details_all = move |_| {
+        state.update(|app| {
+            with_active_tree_mut(app, |tree| set_all_show_details(tree, true));
+        });
+    };
+
+    let on_compact_all = move |_| {
+        state.update(|app| {
+            with_active_tree_mut(app, |tree| set_all_show_details(tree, false));
         });
     };
 
@@ -1391,19 +1528,6 @@ fn App() -> impl IntoView {
                 .unwrap_or_else(|| "project".into())
         );
         let _ = download_text_file(&filename, &markdown.get_untracked(), "text/markdown");
-    };
-
-    let on_add_status = move |_| {
-        let status_name = normalize_status_value(&new_status_input.get_untracked());
-        if status_name.trim().is_empty() {
-            return;
-        }
-        state.update(|app| {
-            if !app.available_statuses.contains(&status_name) {
-                app.available_statuses.push(status_name.clone());
-            }
-        });
-        new_status_input.set(String::new());
     };
 
     let on_connect_drive = move |_| {
@@ -1568,6 +1692,7 @@ fn App() -> impl IntoView {
                     <h1 class="grow">"Todo Tree v3"</h1>
                     <button class:active=move || mode.get() == "view" on:click=move |_| mode.set("view".into())>"Affichage"</button>
                     <button class:active=move || mode.get() == "edit" on:click=move |_| mode.set("edit".into())>"Édition"</button>
+                    <button class:active=move || mode.get() == "settings" on:click=move |_| mode.set("settings".into())>"Settings"</button>
                 </div>
                 <p class="muted">{move || status_message.get()}</p>
                 <p class="muted">
@@ -1591,71 +1716,38 @@ fn App() -> impl IntoView {
                             .collect_view()
                     }}
                 </div>
-                <div class="row">
-                    <input class="grow" type="text" placeholder="Nouveau projet" prop:value=move || new_project_name.get() on:input=move |ev| new_project_name.set(event_target_value(&ev)) />
-                    <button on:click=on_create_project>"+ Projet"</button>
-                </div>
+                <Show when=move || mode.get() == "edit">
+                    <div class="row">
+                        <input class="grow" type="text" placeholder="Nouveau projet" prop:value=move || new_project_name.get() on:input=move |ev| new_project_name.set(event_target_value(&ev)) />
+                        <button on:click=on_create_project>"+ Projet"</button>
+                    </div>
+                </Show>
             </section>
 
-            <Show when=move || mode.get() == "edit">
-                <section class="panel" style="margin-top:16px;">
-                    <h2>"Statuts disponibles"</h2>
-                    <div class="row" style="margin-bottom:10px;">
-                        {move || {
-                            let statuses = normalize_state(state.get()).available_statuses;
-                            statuses
-                                .into_iter()
-                                .map(|status_name| {
-                                    let rename_value = status_name.clone();
-                                    let delete_value = status_name.clone();
-                                    view! {
-                                        <div class="row" style="gap:4px;">
-                                            <span class=status_badge_class(&status_name)>{status_name.clone()}</span>
-                                            <button class="secondary tiny" on:click=move |_| {
-                                                if let Some(next_raw) = prompt("Renommer le statut", &rename_value) {
-                                                    let next = normalize_status_value(&next_raw);
-                                                    if next.trim().is_empty() {
-                                                        return;
-                                                    }
-                                                    state.update(|app| {
-                                                        if let Some(status) = app.available_statuses.iter_mut().find(|status| **status == rename_value) {
-                                                            *status = next.clone();
-                                                        }
-                                                        app.available_statuses = app.available_statuses.iter().fold(Vec::<String>::new(), |mut acc, item| {
-                                                            if !acc.contains(item) {
-                                                                acc.push(item.clone());
-                                                            }
-                                                            acc
-                                                        });
-                                                    });
-                                                }
-                                            }>"✏️"</button>
-                                            <button class="danger tiny" on:click=move |_| {
-                                                state.update(|app| {
-                                                    app.available_statuses.retain(|status| status != &delete_value);
-                                                    if app.available_statuses.is_empty() {
-                                                        app.available_statuses = default_status_options();
-                                                    }
-                                                });
-                                            }>"✕"</button>
-                                        </div>
-                                    }
-                                })
-                                .collect_view()
-                        }}
-                    </div>
-                    <div class="row">
-                        <input class="grow" type="text" placeholder="Ajouter un statut" prop:value=move || new_status_input.get() on:input=move |ev| new_status_input.set(event_target_value(&ev)) />
-                        <button on:click=on_add_status>"+ Statut"</button>
-                    </div>
-                    <p class="muted" style="margin-top:10px;">"Les items conservent leur statut même si tu retires l'option de la liste."</p>
-                </section>
-            </Show>
+            <section class="panel" style="margin-top:16px;">
+                <h2>"Statuts"</h2>
+                <div class="row" style="margin-bottom:10px;">
+                    {move || {
+                        normalize_state(state.get())
+                            .available_statuses
+                            .into_iter()
+                            .map(|status| view! {
+                                <span class=status_badge_class(&status)>{status.as_label().to_string()}</span>
+                            })
+                            .collect_view()
+                    }}
+                </div>
+                <p class="muted">"Statuts disponibles : TODO, DONE, IDEA, BLOCKED."</p>
+            </section>
 
             <section class="panel" style="margin-top:16px;">
                 <div class="row">
                     <input class="grow" type="text" placeholder="Recherche texte..." prop:value=move || text_filter.get() on:input=move |ev| text_filter.set(event_target_value(&ev)) />
                     <input class="grow" type="text" placeholder="Filtre tags..." prop:value=move || tag_filter.get() on:input=move |ev| tag_filter.set(event_target_value(&ev)) />
+                    <button class="secondary" on:click=on_expand_all>"Tout déplier"</button>
+                    <button class="secondary" on:click=on_collapse_all>"Tout replier"</button>
+                    <button class="secondary" on:click=on_compact_all>"Compacter"</button>
+                    <button class="secondary" on:click=on_expand_details_all>"Décompacter"</button>
                     <Show when=move || mode.get() == "edit">
                         <button on:click=on_add_root>"+ Racine"</button>
                     </Show>
@@ -1674,52 +1766,56 @@ fn App() -> impl IntoView {
                 </div>
             </section>
 
-            <section class="panel" style="margin-top:16px;">
-                <h2>"JSON projet actif"</h2>
-                <textarea class="code" prop:value=move || current_json.get() on:input=move |ev| current_json.set(event_target_value(&ev))></textarea>
-                <div class="row" style="margin-top:10px;">
-                    <button on:click=on_import_current>"Importer JSON"</button>
-                    <button class="secondary" on:click=on_download_json>"Télécharger JSON"</button>
-                </div>
-            </section>
+            <Show when=move || mode.get() != "settings">
+                <section class="panel" style="margin-top:16px;">
+                    <h2>"Markdown"</h2>
+                    <textarea class="code" prop:value=move || markdown.get() readonly=true></textarea>
+                    <div class="row" style="margin-top:10px;">
+                        <button class="secondary" on:click=on_download_md>"Télécharger Markdown"</button>
+                    </div>
+                </section>
+            </Show>
 
-            <section class="panel" style="margin-top:16px;">
-                <h2>"Markdown"</h2>
-                <textarea class="code" prop:value=move || markdown.get() readonly=true></textarea>
-                <div class="row" style="margin-top:10px;">
-                    <button class="secondary" on:click=on_download_md>"Télécharger Markdown"</button>
-                </div>
-            </section>
+            <Show when=move || mode.get() == "settings">
+                <section class="panel" style="margin-top:16px;">
+                    <h2>"JSON projet actif"</h2>
+                    <textarea class="code" prop:value=move || current_json.get() on:input=move |ev| current_json.set(event_target_value(&ev))></textarea>
+                    <div class="row" style="margin-top:10px;">
+                        <button on:click=on_import_current>"Importer JSON"</button>
+                        <button class="secondary" on:click=on_download_json>"Télécharger JSON"</button>
+                    </div>
+                </section>
 
-            <section class="panel" style="margin-top:16px;">
-                <h2>"Tous les projets"</h2>
-                <textarea class="code" prop:value=move || all_projects_json.get() on:input=move |ev| all_projects_json.set(event_target_value(&ev))></textarea>
-                <div class="row" style="margin-top:10px;">
-                    <button on:click=on_import_all>"Importer tous les projets"</button>
-                    <button class="secondary" on:click=on_download_all>"Télécharger tout"</button>
-                </div>
-            </section>
+                <section class="panel" style="margin-top:16px;">
+                    <h2>"Tous les projets"</h2>
+                    <textarea class="code" prop:value=move || all_projects_json.get() on:input=move |ev| all_projects_json.set(event_target_value(&ev))></textarea>
+                    <div class="row" style="margin-top:10px;">
+                        <button on:click=on_import_all>"Importer tous les projets"</button>
+                        <button class="secondary" on:click=on_download_all>"Télécharger tout"</button>
+                    </div>
+                </section>
 
-            <section class="panel" style="margin-top:16px; margin-bottom:24px;">
-                <h2>"Google Drive"</h2>
-                <p class="muted">"Client ID OAuth + token + import/upload du fichier global dans appDataFolder."</p>
-                <div class="row" style="margin-bottom:10px;">
-                    <input class="grow" type="text" placeholder="Google OAuth Client ID" prop:value=move || drive_client_id.get() on:input=move |ev| drive_client_id.set(event_target_value(&ev)) />
-                    <button on:click=on_connect_drive>"Connecter Drive"</button>
-                </div>
-                <input class="grow" type="text" placeholder="Access token Google Drive" prop:value=move || drive_token_input.get() on:input=move |ev| drive_token_input.set(event_target_value(&ev)) />
-                <div class="row" style="margin-top:10px;">
-                    <button on:click=on_check_drive>"Vérifier"</button>
-                    <button class="secondary" on:click=on_import_drive>"Importer depuis Drive"</button>
-                    <button class="secondary" on:click=on_upload_drive>"Uploader vers Drive"</button>
-                </div>
-                <p class="muted" style="margin-top:10px;">
-                    {move || {
-                        let drive = normalize_state(state.get()).drive;
-                        format!("{} — {}", drive.status, drive.message)
-                    }}
-                </p>
-            </section>
+                <section class="panel" style="margin-top:16px; margin-bottom:24px;">
+                    <h2>"Google Drive"</h2>
+                    <p class="muted">"Client ID OAuth + token + import/upload du fichier global dans appDataFolder."</p>
+                    <div class="row" style="margin-bottom:10px;">
+                        <input class="grow" type="text" placeholder="Google OAuth Client ID" prop:value=move || drive_client_id.get() on:input=move |ev| drive_client_id.set(event_target_value(&ev)) />
+                        <button on:click=on_connect_drive>"Connecter Drive"</button>
+                    </div>
+                    <input class="grow" type="text" placeholder="Access token Google Drive" prop:value=move || drive_token_input.get() on:input=move |ev| drive_token_input.set(event_target_value(&ev)) />
+                    <div class="row" style="margin-top:10px;">
+                        <button on:click=on_check_drive>"Vérifier"</button>
+                        <button class="secondary" on:click=on_import_drive>"Importer depuis Drive"</button>
+                        <button class="secondary" on:click=on_upload_drive>"Uploader vers Drive"</button>
+                    </div>
+                    <p class="muted" style="margin-top:10px;">
+                        {move || {
+                            let drive = normalize_state(state.get()).drive;
+                            format!("{} — {}", drive.status, drive.message)
+                        }}
+                    </p>
+                </section>
+            </Show>
         </main>
     }
 }

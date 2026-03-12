@@ -29,6 +29,30 @@ Pour éteindre ou après un changement de conf docker:
 docker compose down
 ```
 
+## use
+
+```bash
+cd v3
+# trunk serve --address 0.0.0.0 --port 8080
+ts
+```
+
+## Build
+
+```bash
+trunk build --release
+```
+
+Note: Cela va créer un dossier nommé dist/ à la racine de ton projet v3.
+
+Le point d'attention : Le type MIME
+Le seul piège avec le WASM, c'est que le serveur qui héberge les fichiers doit envoyer le bon header HTTP pour le fichier .wasm :
+Content-Type: application/wasm
+
+GitHub/Vercel/Netlify le font automatiquement.
+
+Si tu utilises ton propre Nginx, il faut juste s'assurer que le fichier /etc/nginx/mime.types inclut bien l'extension .wasm.
+
 ## First config OpenClaw Onboarding
 
 ```bash
@@ -470,3 +494,48 @@ Reproduis les composants React en composants Rust.
 Important : N'ajoute AUCUNE NOUVELLE FONCTIONNALITÉ métier pour le moment. On doit d'abord avoir une base Rust solide, identique visuellement et fonctionnellement à la v2.
 
 Règle absolue : Demande toujours confirmation avant d'exécuter des commandes de suppression (rm) ou si tu as un doute sur une traduction de composant React vers Rust.
+
+## Instructions pour lancer le projet sur mon pc perso
+
+Pour avoir exactement la même chose sur ton PC perso ce soir, sans avoir à te retaper les 15 minutes d'installation de Rust, Trunk et OpenClaw, voici les 3 étapes à suivre :
+
+📦 1. Exporter l'image Docker (Le "moteur")
+Sur ton ThinkPad, ouvre un terminal (pas dans le conteneur) et tape cette commande pour transformer ton image Docker prête à l'emploi en un gros fichier compressé :
+
+Bash
+docker save todo-list-tree-openclaw-agent:latest | gzip > openclaw_env.tar.gz
+(Ça va prendre quelques minutes et créer un fichier d'environ 1 Go ou plus. Ce fichier contient Linux, Rust, Trunk, Wasm et OpenClaw).
+
+📂 2. Copier le projet (La "carrosserie")
+Tu dois récupérer l'intégralité de ton dossier de travail actuel (todo-list-tree).
+⚠️ Attention au piège : Assure-toi de bien copier le dossier caché .openclaw/ qui contient tes clés API et ton auth !
+
+Sur ta clé USB ou ton Google Drive, mets ces deux choses :
+
+Le gros fichier openclaw_env.tar.gz
+
+Tout ton dossier todo-list-tree (avec le v3/, le docker-compose.yml, le Dockerfile et le fameux .openclaw/).
+
+🚀 3. Importer sur ton PC perso (Le redémarrage)
+Une fois chez toi, sur ton PC perso (qui doit juste avoir Docker d'installé) :
+
+Rapatrie le dossier todo-list-tree où tu veux sur ton disque dur.
+
+Charge l'image Docker en ouvrant un terminal dans ce dossier :
+
+Bash
+docker load < openclaw_env.tar.gz
+Lance la machine (ça sera instantané car il n'y a plus rien à "build") :
+
+Bash
+docker compose up -d
+🦀 Et pour reprendre le dev :
+Tu pourras directement ouvrir deux terminaux dans ton conteneur :
+
+Terminal 1 : docker exec -it openclaw-sandbox bash, puis ts (pour lancer Trunk).
+
+Terminal 2 : docker exec -it openclaw-sandbox bash, puis oct (pour parler au homard).
+
+💡 Petite note pour ce soir : L'image Docker te sauve l'installation des outils, mais la toute première fois que tu feras ts sur ton ordi perso, Rust recompilera probablement les crates dans le dossier target/. C'est normal, mais ce sera la seule et unique fois.
+
+C'est bon pour l'export ? Et pendant ce temps, est-ce que le homard a fini de pondre le code de la Phase 2 ? 🦞💻

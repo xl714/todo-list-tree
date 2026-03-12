@@ -5,21 +5,28 @@ services:
     env_file:
       - .env
     volumes:
-      # --- DOSSIERS PROTÉGÉS (Lecture seule / :ro) ---
+      # 1. Montage global : Rend tout ton projet visible (y compris openclaw.json)
+      - .:/app/project
+
+      # 2. Protections : On verrouille ce que l'IA ne doit pas modifier
       - ./.git:/app/project/.git:ro
       - ./v1:/app/project/v1:ro
-      
-      # --- FICHIERS DE CONFIGURATION PROTÉGÉS (:ro) ---
-      - ./.gitignore:/app/project/.gitignore:ro
       - ./Dockerfile:/app/project/Dockerfile:ro
       - ./docker-compose.yml:/app/project/docker-compose.yml:ro
-      
-      # --- ZONE DE TRAVAIL (Lecture & Écriture) ---
-      - ./v2:/app/project/v2
-      - ./v3:/app/project/v3
-      
+
+      # 3. Optimisation Rust : On garde les fichiers lourds de compilation 
+      # à l'intérieur de Docker pour ne pas polluer ton ThinkPad (12 Go friendly)
+      - v3_target:/app/project/v3/target
+
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "18789:18789" # OpenClaw Gateway
+      - "8081:8080"   # Trunk Serve (Ton App Rust)
     stdin_open: true
     tty: true
     restart: unless-stopped
+
+# Définition du volume nommé pour le cache de compilation Rust
+volumes:
+  v3_target:

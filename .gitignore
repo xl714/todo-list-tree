@@ -8,7 +8,7 @@
 **/dist/
 
 # Environnement OpenClaw (si présent dans le dossier)
-.openclaw/
+# .openclaw/
 workspace/
 
 # OS spécifiques

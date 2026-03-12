@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="description" content="Todo List Tree en Leptos + Rust + WebAssembly" />
+    
+    
+    
+    
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <title>Todo Tree v3</title>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+      window.requestGoogleDriveToken = async function (clientId, scope) {
+        if (!window.google?.accounts?.oauth2) {
+          throw new Error("Google Identity Services n'est pas chargé");
+        }
+        return await new Promise((resolve, reject) => {
+          const client = window.google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope,
+            callback: (response) => {
+              if (response?.access_token) resolve(response.access_token);
+              else reject(new Error(response?.error || "Accès refusé"));
+            },
+            error_callback: (error) => {
+              reject(new Error(error?.message || "Erreur Google Identity Services"));
+            },
+          });
+          client.requestAccessToken({ prompt: "consent" });
+        });
+      };
+    </script>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, system-ui, sans-serif;
+        background: linear-gradient(180deg, #09111f 0%, #0b1020 100%);
+        color: #e5e7eb;
+      }
+      .app { max-width: 1180px; margin: 0 auto; padding: 24px; }
+      .panel {
+        background: #121a31;
+        border: 1px solid #24304f;
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .compact-row { gap: 6px; }
+      .grow { flex: 1; min-width: 160px; }
+      input[type="text"], textarea, select {
+        width: 100%;
+        padding: 10px 12px;
+        background: #0b1020;
+        color: #fff;
+        border: 1px solid #334155;
+        border-radius: 10px;
+      }
+      select.status-select { width: auto; min-width: 110px; }
+      textarea.code { min-height: 220px; font-family: ui-monospace, monospace; }
+      textarea.detail-textarea { min-height: 84px; margin-top: 8px; font-family: inherit; }
+      button {
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        background: #1d4ed8;
+        color: white;
+        cursor: pointer;
+      }
+      button.secondary { background: #1f2937; }
+      button.danger { background: #b91c1c; }
+      button.tiny { padding: 6px 8px; font-size: 12px; }
+      button.active { outline: 2px solid #93c5fd; }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .node-wrap { margin-top: 8px; }
+      .node-card {
+        border: 1px solid #24304f;
+        border-radius: 12px;
+        padding: 10px;
+        background: #0f172a;
+      }
+      .children { border-left: 2px solid #334155; margin-left: 14px; padding-left: 10px; }
+      .done { text-decoration: line-through; opacity: .65; }
+      .muted { color: #94a3b8; font-size: .9rem; }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #1f2937;
+        color: #cbd5e1;
+        font-size: 12px;
+      }
+      .depth-badge { background: #1e293b; }
+      .title-text { font-weight: 600; }
+      .meta-stack { display: grid; gap: 8px; margin-top: 10px; }
+      .editor-block { margin-top: 10px; }
+      .action-row { margin-top: 8px; }
+      .node-description {
+        margin: 0;
+        color: #cbd5e1;
+        white-space: pre-wrap;
+        line-height: 1.35;
+      }
+      .tags-row, .links-row { gap: 6px; }
+      .tag-badge, .link-chip, .status-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        border: 1px solid transparent;
+      }
+      .tag-badge {
+        background: rgba(59, 130, 246, .14);
+        color: #bfdbfe;
+        border-color: rgba(59, 130, 246, .28);
+      }
+      .link-chip {
+        background: rgba(16, 185, 129, .12);
+        color: #bbf7d0;
+        border-color: rgba(16, 185, 129, .25);
+        text-decoration: none;
+      }
+      .status-todo {
+        background: rgba(148, 163, 184, .16);
+        color: #e2e8f0;
+        border-color: rgba(148, 163, 184, .28);
+      }
+      .status-done {
+        background: rgba(34, 197, 94, .16);
+        color: #bbf7d0;
+        border-color: rgba(34, 197, 94, .28);
+      }
+      .status-idea {
+        background: rgba(168, 85, 247, .16);
+        color: #e9d5ff;
+        border-color: rgba(168, 85, 247, .28);
+      }
+      .status-blocked {
+        background: rgba(239, 68, 68, .16);
+        color: #fecaca;
+        border-color: rgba(239, 68, 68, .28);
+      }
+      h1, h2, p { margin-top: 0; }
+      @media (max-width: 720px) {
+        .app { padding: 14px; }
+        .grow { min-width: 100%; }
+      }
+    </style>
+  <link rel="modulepreload" href="/todo-list-tree/v3/dist/v3-56d751202b9e8312.js" crossorigin="anonymous" integrity="sha384-DmTQGp8UwP1c7qgbnocF7qC9h9AcYS4T7jNoa2shDR0mjza6imyUHJ8aYVbFbceV"><link rel="preload" href="/todo-list-tree/v3/dist/v3-56d751202b9e8312_bg.wasm" crossorigin="anonymous" integrity="sha384-3cHX/B4SfJL314pKz3yrYzVb8fOUsaQ7mfr9whJYkkhMn0EE3hq1p4gia4ly1hAN" as="fetch" type="application/wasm"></head>
+  <body>
+<script type="module">
+import init, * as bindings from '/todo-list-tree/v3/dist/v3-56d751202b9e8312.js';
+const wasm = await init({ module_or_path: '/todo-list-tree/v3/dist/v3-56d751202b9e8312_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>
