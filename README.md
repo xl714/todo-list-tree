@@ -12,6 +12,9 @@ docker compose up -d --build
 # Entrez dedans : 
 docker exec -it openclaw-sandbox bash
 openclaw gateway
+# ou
+openclaw gateway --allow-unconfigured
+openclaw config set workspace.directory /app/project
 
 # Dans un autre terminal : 
 docker exec -it openclaw-sandbox bash

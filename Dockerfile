@@ -33,8 +33,15 @@ RUN echo 'alias oc="openclaw"' >> /root/.bashrc && \
     echo 'alias ll="ls -alF"' >> /root/.bashrc && \
     echo 'alias tree="tree -I '\''target|.git|node_modules'\''"' >> /root/.bashrc
 
-RUN echo 'll() { ls -alFh --group-directories-first "${1:-.}"; }' >> /root/.bashrc
+RUN echo 'alias ll="ls -alFh --group-directories-first"' >> /root/.bashrc
 RUN echo 'alias usage="du -sh /app/project/* | sort -h"' >> /root/.bashrc
+
+# Crée le dossier de configuration d'OpenClaw dans le conteneur
+RUN mkdir -p /root/.openclaw
+
+# Crée un lien symbolique : OpenClaw lira /root/.openclaw/openclaw.json 
+# qui pointera en réalité sur le fichier de ton ThinkPad (/app/project/openclaw.json)
+RUN ln -s /app/project/openclaw.json /root/.openclaw/openclaw.json
 
 WORKDIR /app/project
 
