@@ -21,6 +21,9 @@ web-sys = { version = "0.3", features = [
   "HtmlTextAreaElement",
   "HtmlAnchorElement",
   "Document",
+  "DocumentFragment",
+  "Element",
+  "HtmlElement",
   "Blob",
   "BlobPropertyBag",
   "FormData",
@@ -30,6 +33,10 @@ web-sys = { version = "0.3", features = [
   "Response",
   "Url",
   "Event",
+  "DragEvent",
+  "DataTransfer",
+  "History",
+  "Location",
   "InputEvent",
 ] }
 rexie = "0.6"

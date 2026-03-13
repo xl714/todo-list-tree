@@ -24,6 +24,8 @@ fn default_show_details() -> bool {
 enum TaskStatus {
     #[serde(rename = "TODO", alias = "Todo")]
     Todo,
+    #[serde(rename = "IN PROGRESS", alias = "In Progress", alias = "IN_PROGRESS", alias = "InProgress")]
+    InProgress,
     #[serde(rename = "DONE", alias = "Done")]
     Done,
     #[serde(rename = "IDEA", alias = "Idea")]
@@ -36,6 +38,7 @@ impl TaskStatus {
     fn as_label(&self) -> &'static str {
         match self {
             Self::Todo => "TODO",
+            Self::InProgress => "IN PROGRESS",
             Self::Done => "DONE",
             Self::Idea => "IDEA",
             Self::Blocked => "BLOCKED",
@@ -44,6 +47,7 @@ impl TaskStatus {
 
     fn from_str(value: &str) -> Self {
         match value.trim().to_uppercase().as_str() {
+            "IN PROGRESS" | "IN_PROGRESS" | "INPROGRESS" => Self::InProgress,
             "DONE" => Self::Done,
             "IDEA" => Self::Idea,
             "BLOCKED" => Self::Blocked,
@@ -57,7 +61,48 @@ fn default_status() -> TaskStatus {
 }
 
 fn default_status_options() -> Vec<TaskStatus> {
-    vec![TaskStatus::Todo, TaskStatus::Done, TaskStatus::Idea, TaskStatus::Blocked]
+    vec![
+        TaskStatus::Todo,
+        TaskStatus::InProgress,
+        TaskStatus::Done,
+        TaskStatus::Idea,
+        TaskStatus::Blocked,
+    ]
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+enum AppTheme {
+    #[serde(rename = "light", alias = "LIGHT", alias = "Light")]
+    Light,
+    #[serde(rename = "dark", alias = "DARK", alias = "Dark")]
+    Dark,
+}
+
+impl AppTheme {
+    fn as_value(&self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "dark" => Self::Dark,
+            _ => Self::Light,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Light => "Clair",
+            Self::Dark => "Sombre",
+        }
+    }
+}
+
+fn default_theme() -> AppTheme {
+    AppTheme::Light
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -118,6 +163,8 @@ struct AppState {
     drive: DriveConfig,
     #[serde(default = "default_status_options")]
     available_statuses: Vec<TaskStatus>,
+    #[serde(default = "default_theme")]
+    theme: AppTheme,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -160,6 +207,7 @@ impl Default for AppState {
                 ..Default::default()
             },
             available_statuses: default_status_options(),
+            theme: default_theme(),
         }
     }
 }
@@ -297,6 +345,8 @@ fn normalize_state(mut state: AppState) -> AppState {
     if state.projects.is_empty() {
         return AppState::default();
     }
+
+    state.theme = AppTheme::from_str(state.theme.as_value());
 
     state.available_statuses = if state.available_statuses.is_empty() {
         default_status_options()
@@ -582,16 +632,67 @@ fn duplicate_node_as_sibling_by_id(nodes: &mut Vec<TodoNode>, node_id: &str) -> 
 }
 
 fn remove_node_by_id(nodes: &mut Vec<TodoNode>, node_id: &str) -> bool {
+    remove_node_by_id_owned(nodes, node_id).is_some()
+}
+
+fn remove_node_by_id_owned(nodes: &mut Vec<TodoNode>, node_id: &str) -> Option<TodoNode> {
     if let Some(index) = nodes.iter().position(|node| node.id == node_id) {
-        nodes.remove(index);
-        return true;
+        return Some(nodes.remove(index));
     }
     for node in nodes.iter_mut() {
-        if remove_node_by_id(&mut node.children, node_id) {
-            return true;
+        if let Some(removed) = remove_node_by_id_owned(&mut node.children, node_id) {
+            return Some(removed);
         }
     }
-    false
+    None
+}
+
+fn tree_contains_node(nodes: &[TodoNode], node_id: &str) -> bool {
+    nodes.iter().any(|node| {
+        node.id == node_id || tree_contains_node(&node.children, node_id)
+    })
+}
+
+fn find_node<'a>(nodes: &'a [TodoNode], node_id: &str) -> Option<&'a TodoNode> {
+    for node in nodes {
+        if node.id == node_id {
+            return Some(node);
+        }
+        if let Some(found) = find_node(&node.children, node_id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn can_drop_node(nodes: &[TodoNode], dragged_id: &str, target_id: &str) -> bool {
+    if dragged_id.is_empty() || target_id.is_empty() || dragged_id == target_id {
+        return false;
+    }
+    let Some(dragged) = find_node(nodes, dragged_id) else {
+        return false;
+    };
+    !tree_contains_node(&dragged.children, target_id)
+}
+
+fn move_node_as_child(nodes: &mut Vec<TodoNode>, dragged_id: &str, target_id: &str) -> bool {
+    if !can_drop_node(nodes, dragged_id, target_id) {
+        return false;
+    }
+    let Some(node) = remove_node_by_id_owned(nodes, dragged_id) else {
+        return false;
+    };
+    add_child_by_id(nodes, target_id, node)
+}
+
+fn move_node_as_sibling(nodes: &mut Vec<TodoNode>, dragged_id: &str, target_id: &str) -> bool {
+    if !can_drop_node(nodes, dragged_id, target_id) {
+        return false;
+    }
+    let Some(node) = remove_node_by_id_owned(nodes, dragged_id) else {
+        return false;
+    };
+    insert_sibling_by_id(nodes, target_id, node)
 }
 
 fn move_item_in_array<T>(items: &mut Vec<T>, from_index: usize, to_index: usize) {
@@ -1006,6 +1107,7 @@ fn status_badge_class(status: &TaskStatus) -> &'static str {
         TaskStatus::Done => "status-badge status-done",
         TaskStatus::Idea => "status-badge status-idea",
         TaskStatus::Blocked => "status-badge status-blocked",
+        TaskStatus::InProgress => "status-badge status-in-progress",
         TaskStatus::Todo => "status-badge status-todo",
     }
 }
@@ -1177,6 +1279,9 @@ fn render_node(
     mode: String,
     depth: usize,
     status_options: Vec<TaskStatus>,
+    drag_drop_enabled: RwSignal<bool>,
+    dragging_node_id: RwSignal<Option<String>>,
+    drop_target: RwSignal<Option<String>>,
 ) -> AnyView {
     let has_children = !node.children.is_empty();
     let links_text = links_to_text(&node.links);
@@ -1196,6 +1301,11 @@ fn render_node(
     let description_id = node_id.clone();
     let links_id = node_id.clone();
     let details_id = node_id.clone();
+    let drag_id = node_id.clone();
+    let sibling_drop_id = node_id.clone();
+    let child_drop_id = node_id.clone();
+    let child_target_key = format!("child:{}", node_id.clone());
+    let sibling_target_key = format!("sibling:{}", node_id.clone());
 
     let left_control = if mode == "view" {
         view! {
@@ -1291,22 +1401,137 @@ fn render_node(
     };
 
     let actions = if mode == "edit" {
+        let drag_handle = move || {
+            if !drag_drop_enabled.get() {
+                return view! { <></> }.into_any();
+            }
+            let drag_start_id = drag_id.clone();
+            let drag_data_id = drag_id.clone();
+            view! {
+                <button
+                    class="secondary tiny drag-handle"
+                    draggable="true"
+                    title="Drag & Drop"
+                    on:dragstart=move |ev| {
+                        dragging_node_id.set(Some(drag_start_id.clone()));
+                        if let Some(data_transfer) = ev.data_transfer() {
+                            let _ = data_transfer.set_data("text/plain", &drag_data_id);
+                            data_transfer.set_drop_effect("move");
+                        }
+                    }
+                    on:dragend=move |_| {
+                        dragging_node_id.set(None);
+                        drop_target.set(None);
+                    }
+                >"⋮⋮"</button>
+            }
+            .into_any()
+        };
+        let child_active_key = child_target_key.clone();
+        let child_drag_over_key = child_target_key.clone();
+        let child_drag_leave_key = child_target_key.clone();
+        let child_drop_id_move = child_drop_id.clone();
+        let child_add_id_drop = add_child_id.clone();
+        let child_add_id_click = add_child_id.clone();
+        let sibling_active_key = sibling_target_key.clone();
+        let sibling_drag_over_key = sibling_target_key.clone();
+        let sibling_drag_leave_key = sibling_target_key.clone();
+        let sibling_drop_id_move = sibling_drop_id.clone();
+        let sibling_add_id_drop = add_sibling_id.clone();
+        let sibling_add_id_click = add_sibling_id.clone();
         view! {
             <div class="row action-row">
-                <button class="secondary tiny" on:click=move |_| {
-                    state.update(|app| {
-                        with_active_tree_mut(app, |tree| {
-                            add_child_by_id(tree, &add_child_id, create_node("Nouvel enfant"));
+                {drag_handle}
+                <button
+                    class="secondary tiny"
+                    class:drop-target-active=move || drop_target.get() == Some(child_active_key.clone())
+                    on:dragover=move |ev| {
+                        if !drag_drop_enabled.get() {
+                            return;
+                        }
+                        let dragged = dragging_node_id.get_untracked().unwrap_or_default();
+                        let snapshot = active_tree(&state.get_untracked());
+                        if can_drop_node(&snapshot, &dragged, &child_drop_id) {
+                            ev.prevent_default();
+                            drop_target.set(Some(child_drag_over_key.clone()));
+                            if let Some(data_transfer) = ev.data_transfer() {
+                                data_transfer.set_drop_effect("move");
+                            }
+                        }
+                    }
+                    on:dragleave=move |_| {
+                        if drop_target.get_untracked() == Some(child_drag_leave_key.clone()) {
+                            drop_target.set(None);
+                        }
+                    }
+                    on:drop=move |ev| {
+                        ev.prevent_default();
+                        drop_target.set(None);
+                        let Some(dragged) = dragging_node_id.get_untracked() else {
+                            return;
+                        };
+                        state.update(|app| {
+                            with_active_tree_mut(app, |tree| {
+                                if !move_node_as_child(tree, &dragged, &child_drop_id_move) {
+                                    add_child_by_id(tree, &child_add_id_drop, create_node("Nouvel enfant"));
+                                }
+                            });
                         });
-                    });
-                }>"+ Child"</button>
-                <button class="secondary tiny" on:click=move |_| {
-                    state.update(|app| {
-                        with_active_tree_mut(app, |tree| {
-                            insert_sibling_by_id(tree, &add_sibling_id, create_node("Nouveau sibling"));
+                        dragging_node_id.set(None);
+                    }
+                    on:click=move |_| {
+                        state.update(|app| {
+                            with_active_tree_mut(app, |tree| {
+                                add_child_by_id(tree, &child_add_id_click, create_node("Nouvel enfant"));
+                            });
                         });
-                    });
-                }>"+ Sibling"</button>
+                    }
+                >{move || if drag_drop_enabled.get() { "Child" } else { "+ Child" }}</button>
+                <button
+                    class="secondary tiny"
+                    class:drop-target-active=move || drop_target.get() == Some(sibling_active_key.clone())
+                    on:dragover=move |ev| {
+                        if !drag_drop_enabled.get() {
+                            return;
+                        }
+                        let dragged = dragging_node_id.get_untracked().unwrap_or_default();
+                        let snapshot = active_tree(&state.get_untracked());
+                        if can_drop_node(&snapshot, &dragged, &sibling_drop_id) {
+                            ev.prevent_default();
+                            drop_target.set(Some(sibling_drag_over_key.clone()));
+                            if let Some(data_transfer) = ev.data_transfer() {
+                                data_transfer.set_drop_effect("move");
+                            }
+                        }
+                    }
+                    on:dragleave=move |_| {
+                        if drop_target.get_untracked() == Some(sibling_drag_leave_key.clone()) {
+                            drop_target.set(None);
+                        }
+                    }
+                    on:drop=move |ev| {
+                        ev.prevent_default();
+                        drop_target.set(None);
+                        let Some(dragged) = dragging_node_id.get_untracked() else {
+                            return;
+                        };
+                        state.update(|app| {
+                            with_active_tree_mut(app, |tree| {
+                                if !move_node_as_sibling(tree, &dragged, &sibling_drop_id_move) {
+                                    insert_sibling_by_id(tree, &sibling_add_id_drop, create_node("Nouveau sibling"));
+                                }
+                            });
+                        });
+                        dragging_node_id.set(None);
+                    }
+                    on:click=move |_| {
+                        state.update(|app| {
+                            with_active_tree_mut(app, |tree| {
+                                insert_sibling_by_id(tree, &sibling_add_id_click, create_node("Nouveau sibling"));
+                            });
+                        });
+                    }
+                >{move || if drag_drop_enabled.get() { "Sibling" } else { "+ Sibling" }}</button>
                 <button class="secondary tiny" on:click=move |_| {
                     state.update(|app| {
                         with_active_tree_mut(app, |tree| {
@@ -1347,7 +1572,7 @@ fn render_node(
             .children
             .clone()
             .into_iter()
-            .map(|child| render_node(child, state, mode.clone(), depth + 1, status_options.clone()))
+            .map(|child| render_node(child, state, mode.clone(), depth + 1, status_options.clone(), drag_drop_enabled, dragging_node_id, drop_target))
             .collect_view();
         view! { <div class="children">{child_views}</div> }.into_any()
     } else {
@@ -1356,7 +1581,7 @@ fn render_node(
 
     view! {
         <div class="node-wrap" style=format!("margin-left:{}px", depth * 10)>
-            <div class="node-card">
+            <div class="node-card" class:dragging-node=move || dragging_node_id.get() == Some(node_id.clone())>
                 <div class="row compact-row">
                     <button class="secondary tiny" on:click=move |_| {
                         state.update(|app| {
@@ -1401,6 +1626,10 @@ fn App() -> impl IntoView {
     let all_projects_json = RwSignal::new(String::new());
     let drive_client_id = RwSignal::new(String::new());
     let drive_token_input = RwSignal::new(String::new());
+    let drag_drop_enabled = RwSignal::new(false);
+    let dragging_node_id = RwSignal::new(None::<String>);
+    let drop_target = RwSignal::new(None::<String>);
+    let app_ready = RwSignal::new(false);
 
     Effect::new(move |_| {
         let state = state;
@@ -1408,10 +1637,44 @@ fn App() -> impl IntoView {
         let current_json = current_json;
         let markdown = markdown;
         let all_projects_json = all_projects_json;
+        let app_ready = app_ready;
         spawn_local(async move {
             match load_state().await {
                 Ok(loaded) => {
-                    let normalized = normalize_state(loaded);
+                    let mut normalized = normalize_state(loaded);
+                    let mut initial_status = String::from("État chargé depuis IndexedDB");
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(search) = window.location().search() {
+                            if let Some(project_code) = parse_query_param(&search, "project") {
+                                if normalized.projects.iter().any(|project| project.code == project_code) {
+                                    normalized.active_project_code = project_code;
+                                } else {
+                                    initial_status = format!(
+                                        "Projet demandé introuvable dans l’URL: {} • fallback sur {}",
+                                        project_code,
+                                        normalized.active_project_code
+                                    );
+                                }
+                            }
+                            if let Some(initial_mode) = parse_query_param(&search, "mode") {
+                                if ["view", "edit", "settings"].contains(&initial_mode.as_str()) {
+                                    mode.set(initial_mode);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(search) = window.location().search() {
+                            if let Some(project_code) = parse_query_param(&search, "project") {
+                                if normalized.projects.iter().any(|project| project.code == project_code) {
+                                    initial_status = format!(
+                                        "État chargé depuis IndexedDB • projet URL: {}",
+                                        project_code
+                                    );
+                                }
+                            }
+                        }
+                    }
                     let active_tree_snapshot = active_tree(&normalized);
                     let project_name = active_project(&normalized)
                         .map(|project| project.name.clone())
@@ -1422,9 +1685,13 @@ fn App() -> impl IntoView {
                     drive_client_id.set(normalized.drive.client_id.clone());
                     drive_token_input.set(normalized.drive.access_token.clone());
                     state.set(normalized);
-                    status_message.set("État chargé depuis IndexedDB".into());
+                    app_ready.set(true);
+                    status_message.set(initial_status);
                 }
-                Err(err) => status_message.set(format!("Chargement impossible: {:?}", err)),
+                Err(err) => {
+                    app_ready.set(true);
+                    status_message.set(format!("Chargement impossible: {:?}", err));
+                }
             }
         });
     });
@@ -1441,6 +1708,9 @@ fn App() -> impl IntoView {
     });
 
     Effect::new(move |_| {
+        if !app_ready.get() {
+            return;
+        }
         let snapshot = normalize_state(state.get());
         let status_message = status_message;
         spawn_local(async move {
@@ -1449,6 +1719,33 @@ fn App() -> impl IntoView {
                 Err(err) => status_message.set(format!("Erreur de sauvegarde: {:?}", err)),
             }
         });
+    });
+
+    Effect::new(move |_| {
+        if !app_ready.get() {
+            return;
+        }
+        let snapshot = normalize_state(state.get());
+        let current_mode = mode.get();
+        sync_url(&snapshot.active_project_code, &current_mode);
+    });
+
+    Effect::new(move |_| {
+        let theme = normalize_state(state.get()).theme;
+        if let Some(window) = web_sys::window() {
+            if let Some(document) = window.document() {
+                if let Some(root) = document.document_element() {
+                    let _ = root.set_attribute("data-theme", theme.as_value());
+                }
+                if let Some(meta) = document.query_selector("meta[name='theme-color']").ok().flatten() {
+                    let color = match theme {
+                        AppTheme::Light => "#f8fafc",
+                        AppTheme::Dark => "#111827",
+                    };
+                    let _ = meta.set_attribute("content", color);
+                }
+            }
+        }
     });
 
     Effect::new(move |_| {
@@ -1790,11 +2087,39 @@ fn App() -> impl IntoView {
     view! {
         <main class="app">
             <section class="panel">
-                <div class="row">
-                    <h1 class="grow">"Todo Tree v3"</h1>
-                    <button class:active=move || mode.get() == "view" on:click=move |_| mode.set("view".into())>"Affichage"</button>
-                    <button class:active=move || mode.get() == "edit" on:click=move |_| mode.set("edit".into())>"Édition"</button>
-                    <button class:active=move || mode.get() == "settings" on:click=move |_| mode.set("settings".into())>"Settings"</button>
+                <div class="row" style="display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; gap:12px;">
+                    <div>
+                        <h1 style="margin:0;">"Todo Tree v3"</h1>
+                    </div>
+                    <div class="row" style="justify-content:center; align-items:center; margin:0 auto;">
+                        <select
+                            style="min-width:220px;"
+                            prop:value=move || normalize_state(state.get()).active_project_code
+                            on:change=move |ev| {
+                                let selected_code = event_target_select_value(&ev);
+                                state.update(|app| {
+                                    if app.projects.iter().any(|project| project.code == selected_code) {
+                                        app.active_project_code = selected_code.clone();
+                                    }
+                                });
+                            }
+                        >
+                            {move || {
+                                normalize_state(state.get())
+                                    .projects
+                                    .into_iter()
+                                    .map(|project| view! {
+                                        <option value=project.code.clone()>{project.name.clone()}</option>
+                                    })
+                                    .collect_view()
+                            }}
+                        </select>
+                    </div>
+                    <div class="row" style="justify-content:flex-end;">
+                        <button class:active=move || mode.get() == "view" on:click=move |_| mode.set("view".into())>"Affichage"</button>
+                        <button class:active=move || mode.get() == "edit" on:click=move |_| mode.set("edit".into())>"Édition"</button>
+                        <button class:active=move || mode.get() == "settings" on:click=move |_| mode.set("settings".into())>"Settings"</button>
+                    </div>
                 </div>
                 <p class="muted">{move || status_message.get()}</p>
                 <p class="muted">
@@ -1805,68 +2130,39 @@ fn App() -> impl IntoView {
                 </p>
             </section>
 
-            <section class="panel" style="margin-top:16px;">
-                <h2>"Projets"</h2>
-                <div class="row" style="margin-bottom:10px;">
-                    {move || {
-                        let snapshot = normalize_state(state.get());
-                        let current_mode = mode.get();
-                        snapshot
-                            .projects
-                            .into_iter()
-                            .map(|project| render_project_chip(project, state, current_mode.clone(), status_message))
-                            .collect_view()
-                    }}
-                </div>
-                <Show when=move || mode.get() == "edit">
+            <Show when=move || mode.get() != "settings">
+                <section class="panel" style="margin-top:16px;">
                     <div class="row">
-                        <input class="grow" type="text" placeholder="Nouveau projet" prop:value=move || new_project_name.get() on:input=move |ev| new_project_name.set(event_target_value(&ev)) />
-                        <button on:click=on_create_project>"+ Projet"</button>
+                        <input class="grow" type="text" placeholder="Recherche texte..." prop:value=move || text_filter.get() on:input=move |ev| text_filter.set(event_target_value(&ev)) />
+                        <input class="grow" type="text" placeholder="Filtre tags..." prop:value=move || tag_filter.get() on:input=move |ev| tag_filter.set(event_target_value(&ev)) />
+                        <button class="secondary" on:click=on_expand_all>"Tout déplier"</button>
+                        <button class="secondary" on:click=on_collapse_all>"Tout replier"</button>
+                        <button class="secondary" on:click=on_compact_all>"Compacter"</button>
+                        <button class="secondary" on:click=on_expand_details_all>"Décompacter"</button>
+                        <Show when=move || mode.get() == "edit">
+                            <button
+                                class=move || if drag_drop_enabled.get() { "secondary active" } else { "secondary" }
+                                on:click=move |_| drag_drop_enabled.update(|value| *value = !*value)
+                            >
+                                {move || if drag_drop_enabled.get() { "Drag&Drop: ON" } else { "Drag&Drop: OFF" }}
+                            </button>
+                            <button on:click=on_add_root>"+ Racine"</button>
+                        </Show>
                     </div>
-                </Show>
-            </section>
-
-            <section class="panel" style="margin-top:16px;">
-                <h2>"Statuts"</h2>
-                <div class="row" style="margin-bottom:10px;">
-                    {move || {
-                        normalize_state(state.get())
-                            .available_statuses
-                            .into_iter()
-                            .map(|status| view! {
-                                <span class=status_badge_class(&status)>{status.as_label().to_string()}</span>
-                            })
-                            .collect_view()
-                    }}
-                </div>
-                <p class="muted">"Statuts disponibles : TODO, DONE, IDEA, BLOCKED."</p>
-            </section>
-
-            <section class="panel" style="margin-top:16px;">
-                <div class="row">
-                    <input class="grow" type="text" placeholder="Recherche texte..." prop:value=move || text_filter.get() on:input=move |ev| text_filter.set(event_target_value(&ev)) />
-                    <input class="grow" type="text" placeholder="Filtre tags..." prop:value=move || tag_filter.get() on:input=move |ev| tag_filter.set(event_target_value(&ev)) />
-                    <button class="secondary" on:click=on_expand_all>"Tout déplier"</button>
-                    <button class="secondary" on:click=on_collapse_all>"Tout replier"</button>
-                    <button class="secondary" on:click=on_compact_all>"Compacter"</button>
-                    <button class="secondary" on:click=on_expand_details_all>"Décompacter"</button>
-                    <Show when=move || mode.get() == "edit">
-                        <button on:click=on_add_root>"+ Racine"</button>
-                    </Show>
-                </div>
-                <div style="margin-top:16px;">
-                    {move || {
-                        let snapshot = normalize_state(state.get());
-                        let current_mode = mode.get();
-                        let status_options = snapshot.available_statuses.clone();
-                        filtered_tree
-                            .get()
-                            .into_iter()
-                            .map(|node| render_node(node, state, current_mode.clone(), 0, status_options.clone()))
-                            .collect_view()
-                    }}
-                </div>
-            </section>
+                    <div style="margin-top:16px;">
+                        {move || {
+                            let snapshot = normalize_state(state.get());
+                            let current_mode = mode.get();
+                            let status_options = snapshot.available_statuses.clone();
+                            filtered_tree
+                                .get()
+                                .into_iter()
+                                .map(|node| render_node(node, state, current_mode.clone(), 0, status_options.clone(), drag_drop_enabled, dragging_node_id, drop_target))
+                                .collect_view()
+                        }}
+                    </div>
+                </section>
+            </Show>
 
             <Show when=move || mode.get() != "settings">
                 <section class="panel" style="margin-top:16px;">
@@ -1879,6 +2175,104 @@ fn App() -> impl IntoView {
             </Show>
 
             <Show when=move || mode.get() == "settings">
+                <section class="panel" style="margin-top:16px;">
+                    <h2>"Apparence"</h2>
+                    <div class="row" style="margin-top:10px;">
+                        <label for="theme-select">"Thème"</label>
+                        <select
+                            id="theme-select"
+                            style="max-width:220px;"
+                            prop:value=move || normalize_state(state.get()).theme.as_value().to_string()
+                            on:change=move |ev| {
+                                let selected = AppTheme::from_str(&event_target_select_value(&ev));
+                                state.update(|app| {
+                                    app.theme = selected.clone();
+                                });
+                            }
+                        >
+                            {move || {
+                                vec![AppTheme::Light, AppTheme::Dark]
+                                    .into_iter()
+                                    .map(|theme| view! {
+                                        <option value=theme.as_value()>{theme.label()}</option>
+                                    })
+                                    .collect_view()
+                            }}
+                        </select>
+                        <span class="muted">"Par défaut: clair. Préférence sauvegardée dans IndexedDB."</span>
+                    </div>
+                </section>
+
+                <section class="panel" style="margin-top:16px;">
+                    <h2>"Projets"</h2>
+                    <div class="row">
+                        <input class="grow" type="text" placeholder="Nouveau projet" prop:value=move || new_project_name.get() on:input=move |ev| new_project_name.set(event_target_value(&ev)) />
+                        <button on:click=on_create_project>"+ Projet"</button>
+                    </div>
+                    <div class="row" style="margin-top:10px; margin-bottom:10px;">
+                        {move || {
+                            let snapshot = normalize_state(state.get());
+                            snapshot
+                                .projects
+                                .into_iter()
+                                .map(|project| render_project_chip(project, state, "edit".into(), status_message))
+                                .collect_view()
+                        }}
+                    </div>
+                </section>
+
+                <section class="panel" style="margin-top:16px;">
+                    <h2>"Statuts"</h2>
+                    <div class="row" style="margin-bottom:10px;">
+                        {move || {
+                            normalize_state(state.get())
+                                .available_statuses
+                                .into_iter()
+                                .map(|status| view! {
+                                    <span class=status_badge_class(&status)>{status.as_label().to_string()}</span>
+                                })
+                                .collect_view()
+                        }}
+                    </div>
+                    <div class="row" style="align-items:flex-start;">
+                        {move || {
+                            let enabled_statuses = normalize_state(state.get()).available_statuses;
+                            default_status_options()
+                                .into_iter()
+                                .map(|status| {
+                                    let is_enabled = enabled_statuses.contains(&status);
+                                    let status_value = status.clone();
+                                    view! {
+                                        <label class="row" style="gap:6px; padding:6px 10px; border:1px solid var(--panel-border); border-radius:10px;">
+                                            <input
+                                                type="checkbox"
+                                                prop:checked=is_enabled
+                                                on:change=move |ev| {
+                                                    let checked = event_target_checked(&ev);
+                                                    state.update(|app| {
+                                                        if checked {
+                                                            if !app.available_statuses.contains(&status_value) {
+                                                                app.available_statuses.push(status_value.clone());
+                                                            }
+                                                        } else {
+                                                            app.available_statuses.retain(|item| item != &status_value);
+                                                            if app.available_statuses.is_empty() {
+                                                                app.available_statuses.push(TaskStatus::Todo);
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            />
+                                            <span class=status_badge_class(&status)>{status.as_label().to_string()}</span>
+                                        </label>
+                                    }
+                                })
+                                .collect_view()
+                        }}
+                    </div>
+                    <p class="muted">"Tu peux activer/désactiver les statuts proposés dans les sélecteurs. Si un item utilise déjà un statut masqué, il reste conservé."</p>
+                </section>
+
                 <section class="panel" style="margin-top:16px;">
                     <h2>"JSON projet actif"</h2>
                     <textarea class="code" prop:value=move || current_json.get() on:input=move |ev| current_json.set(event_target_value(&ev))></textarea>
@@ -1964,4 +2358,45 @@ where
         .and_then(|target| target.dyn_into::<web_sys::HtmlSelectElement>().ok())
         .map(|select| select.value())
         .unwrap_or_default()
+}
+
+fn parse_query_param(search: &str, key: &str) -> Option<String> {
+    let search = search.strip_prefix('?').unwrap_or(search);
+    search
+        .split('&')
+        .filter(|part| !part.is_empty())
+        .find_map(|part| {
+            let mut chunks = part.splitn(2, '=');
+            let raw_key = chunks.next().unwrap_or_default();
+            let raw_value = chunks.next().unwrap_or_default();
+            if raw_key == key {
+                Some(raw_value.replace('+', " "))
+            } else {
+                None
+            }
+        })
+}
+
+fn sync_url(active_project_code: &str, mode: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let location = window.location();
+    let pathname = location.pathname().unwrap_or_else(|_| "/".into());
+    let mut params = vec![];
+    if !active_project_code.trim().is_empty() {
+        params.push(format!("project={}", active_project_code));
+    }
+    if !mode.trim().is_empty() {
+        params.push(format!("mode={}", mode));
+    }
+    let query = if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    };
+    let url = format!("{}{}", pathname, query);
+    if let Ok(history) = window.history() {
+        let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&url));
+    }
 }
